@@ -97,14 +97,7 @@ ApplicationWindow {
     }
 
     Shortcut {
-        sequence: "Return"
-        context: Qt.ApplicationShortcut
-        enabled: win.hasVideo && backend.duration > 0 && !backend.busy
-        onActivated: exportVideo()
-    }
-
-    Shortcut {
-        sequence: "Enter"
+        sequences: ["Return", "Enter"]
         context: Qt.ApplicationShortcut
         enabled: win.hasVideo && backend.duration > 0 && !backend.busy
         onActivated: exportVideo()
