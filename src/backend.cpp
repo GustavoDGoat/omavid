@@ -222,19 +222,17 @@ void Backend::exportClip(const QUrl &dst, double start, double end) {
                 *completed = true;
                 const QString err = QString::fromUtf8(proc->readAll()).trimmed();
                 proc->deleteLater();
+                if (exitStatus != QProcess::NormalExit || code != 0) {
+                    failExport(tmpPath, err.isEmpty() ? QStringLiteral("ffmpeg trim failed.") : err);
+                    return;
+                }
+                if (!replaceWithTemp(tmpPath, outPath)) {
+                    failExport(tmpPath, QStringLiteral("Could not write the exported file."));
+                    return;
+                }
                 setBusy(false);
                 setStatus(QString());
-                if (exitStatus == QProcess::NormalExit && code == 0) {
-                    if (replaceWithTemp(tmpPath, outPath)) {
-                        emit exportDone(outPath);
-                    } else {
-                        QFile::remove(tmpPath);
-                        emit exportFailed("Could not write the exported file.");
-                    }
-                } else {
-                    QFile::remove(tmpPath);
-                    emit exportFailed(err.isEmpty() ? "ffmpeg trim failed." : err);
-                }
+                emit exportDone(outPath);
             });
     connect(proc, &QProcess::errorOccurred, this,
             [this, proc, tmpPath, completed](QProcess::ProcessError error) {
@@ -243,10 +241,14 @@ void Backend::exportClip(const QUrl &dst, double start, double end) {
                 *completed = true;
                 const QString err = proc->errorString();
                 proc->deleteLater();
-                setBusy(false);
-                setStatus(QString());
-                QFile::remove(tmpPath);
-                emit exportFailed(err.isEmpty() ? "Could not start ffmpeg." : err);
+                failExport(tmpPath, err.isEmpty() ? QStringLiteral("Could not start ffmpeg.") : err);
             });
     proc->start(ffmpegBin, args);
+}
+
+void Backend::failExport(const QString &tmpPath, const QString &message) {
+    setBusy(false);
+    setStatus(QString());
+    QFile::remove(tmpPath);
+    emit exportFailed(message);
 }

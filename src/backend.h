@@ -62,6 +62,7 @@ signals:
 private:
     void setBusy(bool busy);
     void setStatus(const QString &status);
+    void failExport(const QString &tmpPath, const QString &message);
     void startThumbs();
     void stopThumbs();
     void revealNextThumb();
