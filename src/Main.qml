@@ -17,15 +17,12 @@ ApplicationWindow {
     readonly property bool audioOutputReady: audioOutput !== null
     property var audioOutput: null
     property string noticeText: ""
-    readonly property string statusText: noticeText !== "" ? noticeText
-        : backend.status !== "" ? backend.status
-        : ""
+    readonly property string statusText: noticeText !== "" ? noticeText : backend.status
 
     Material.theme: Material.Dark
     Material.accent: "#FFD60A"
     color: "#0e0e10"
 
-    function fmt(sec) { return Format.fmt(sec); }
     function fileName(url) {
         var s = url.toString();
         return s === "" ? "" : decodeURIComponent(s.substring(s.lastIndexOf('/') + 1));
@@ -192,7 +189,7 @@ ApplicationWindow {
         property string tipText: ""
         signal clicked()
 
-        color: enabled ? buttonColor : "#2c2c2f"
+        color: buttonColor
         opacity: enabled ? 1 : 0.45
 
         HoverHandler { id: iconHover }
@@ -321,8 +318,6 @@ ApplicationWindow {
                 Layout.preferredWidth: 44
                 Layout.preferredHeight: 44
                 iconName: player.playbackState === MediaPlayer.PlayingState && !player.priming ? "pause" : "play"
-                iconColor: "#ffffff"
-                buttonColor: "#2c2c2f"
                 tipText: player.playbackState === MediaPlayer.PlayingState ? "Pause" : "Play"
                 enabled: backend.duration > 0
                 onClicked: togglePlay()
@@ -342,8 +337,6 @@ ApplicationWindow {
                 Layout.preferredWidth: 44
                 Layout.preferredHeight: 44
                 iconName: "download"
-                iconColor: "#ffffff"
-                buttonColor: "#2c2c2f"
                 tipText: "Export"
                 enabled: backend.duration > 0 && !backend.busy
                 onClicked: exportVideo()
@@ -369,17 +362,13 @@ ApplicationWindow {
                 elide: Text.ElideMiddle
             }
 
-            Row {
+            Label {
                 anchors.centerIn: parent
                 visible: win.statusText === "" && backend.duration > 0 && !trimBar.trimmingRange
-                spacing: 18
-
-                Label {
-                    text: fmt(trimBar.endSec - trimBar.startSec)
-                    color: "#d6d6da"
-                    font.pixelSize: 13
-                    font.family: "monospace"
-                }
+                text: Format.fmt(trimBar.endSec - trimBar.startSec)
+                color: "#d6d6da"
+                font.pixelSize: 13
+                font.family: "monospace"
             }
         }
     }

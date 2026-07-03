@@ -31,8 +31,6 @@ Item {
 
     signal scrub(real seconds)
 
-    function fmt(sec) { return Format.fmt(sec); }
-
     function xForTime(t) {
         if (durationSec <= 0)
             return trackX;
@@ -158,7 +156,7 @@ Item {
 
         Text {
             anchors.centerIn: parent
-            text: root.fmt(root.activeTime)
+            text: Format.fmt(root.activeTime)
             color: "white"
             font.pixelSize: 15
             font.family: "monospace"
