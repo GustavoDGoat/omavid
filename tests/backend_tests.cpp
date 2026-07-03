@@ -568,6 +568,7 @@ void BackendTests::trimArgsReencodeForPreciseCuts() {
 
     QVERIFY(args.contains(QStringLiteral("libx264")));
     QVERIFY(args.contains(QStringLiteral("aac")));
+    QVERIFY(args.contains(QStringLiteral("+faststart")));
     QVERIFY(!args.contains(QStringLiteral("copy")));
 }
 

@@ -122,12 +122,15 @@ QImage thumbnail(const QString &path, double time, int height,
 
 QStringList trimArgs(const QString &src, const QString &dst, double start, double end) {
     QStringList args = {"-y", "-loglevel", "error"};
-    // -ss before -i seeks fast; -t gives the output duration.
+    // -ss before -i seeks fast; -t gives the output duration. +faststart puts
+    // the moov atom up front so shared clips start playing before they finish
+    // downloading.
     args << "-ss" << QString::number(start, 'f', 3)
          << "-i" << src
          << "-t" << QString::number(qMax(end - start, 0.0), 'f', 3)
          << "-c:v" << "libx264" << "-preset" << "veryfast"
          << "-crf" << "18" << "-c:a" << "aac"
+         << "-movflags" << "+faststart"
          << dst;
     return args;
 }
