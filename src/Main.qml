@@ -63,8 +63,13 @@ ApplicationWindow {
             player.pause();
             return;
         }
+        // The pause-at-end clamp rounds to whole milliseconds and the player
+        // snaps seeks to frames, so a finished clip can rest a fraction of a
+        // millisecond before endSec. Treat anything within 10 ms of the end
+        // as "at the end" or play would instantly re-pause instead of
+        // restarting from the trim start.
         var pos = player.position / 1000;
-        if (pos < trimBar.startSec || pos >= trimBar.endSec)
+        if (pos < trimBar.startSec || pos >= trimBar.endSec - 0.01)
             player.position = Math.round(trimBar.startSec * 1000);
         player.play();
     }
