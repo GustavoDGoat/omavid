@@ -83,7 +83,6 @@ PortalFileFilter videoFilter() {
 }
 
 PortalFileFilters videoFilters() {
-    registerPortalFilterTypes();
     return {
         videoFilter(),
         {QStringLiteral("All files"), {{0, QStringLiteral("*")}}},
@@ -91,7 +90,6 @@ PortalFileFilters videoFilters() {
 }
 
 PortalFileFilter mp4Filter() {
-    registerPortalFilterTypes();
     return {QStringLiteral("MP4 video"), {{0, QStringLiteral("*.mp4")}}};
 }
 
@@ -110,7 +108,9 @@ QByteArray portalPathBytes(const QString &path) {
 }
 }
 
-PortalFilePicker::PortalFilePicker(QObject *parent) : FilePicker(parent) {}
+PortalFilePicker::PortalFilePicker(QObject *parent) : FilePicker(parent) {
+    registerPortalFilterTypes();
+}
 
 void PortalFilePicker::openVideo() {
     QVariantMap options;
