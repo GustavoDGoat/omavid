@@ -186,7 +186,17 @@ void Backend::exportClip(const QUrl &dst, double start, double end) {
         return;
     }
 
-    const QString outPath = mp4PathFor(dst.toLocalFile());
+    // Forcing the .mp4 suffix can redirect the write to a file the save
+    // dialog never asked the user about overwriting — refuse rather than
+    // silently replace it.
+    const QString selectedPath = dst.toLocalFile();
+    const QString outPath = mp4PathFor(selectedPath);
+    if (outPath != selectedPath && QFileInfo::exists(outPath)) {
+        emit exportFailed(QStringLiteral("%1 already exists.")
+                              .arg(QFileInfo(outPath).fileName()));
+        return;
+    }
+
     const QString ffmpegBin = ffmpeg::toolPath("ffmpeg");
     if (ffmpegBin.isEmpty()) {
         emit exportFailed("`ffmpeg` was not found on your PATH.");

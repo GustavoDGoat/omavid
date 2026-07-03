@@ -123,6 +123,7 @@ private slots:
     void exportClipWritesMp4();
     void exportClipCanReplaceSourceFile();
     void exportZeroLengthClipFails();
+    void exportRefusesRewrittenPathOverExistingFile();
     void exportStartFailureClearsBusy();
     void failedExportPreservesExistingFile();
     void qmlDoesNotCreateAudioOutputWithoutVideo();
@@ -409,6 +410,39 @@ void BackendTests::exportZeroLengthClipFails() {
     QCOMPARE(doneSpy.count(), 0);
     QVERIFY(!backend.busy());
     QVERIFY(!QFileInfo::exists(outPath));
+}
+
+void BackendTests::exportRefusesRewrittenPathOverExistingFile() {
+    ThumbProvider provider;
+    auto *picker = new FakeFilePicker;
+    Backend backend(&provider, picker);
+    QSignalSpy doneSpy(&backend, &Backend::exportDone);
+    QSignalSpy failedSpy(&backend, &Backend::exportFailed);
+
+    QVERIFY(backend.load(videoUrl()));
+    waitForBackgroundWork(backend);
+
+    // The dialog confirmed "rewrite-target.webm"; forcing the .mp4 suffix
+    // would land on this existing file the user was never asked about.
+    const QString selectedPath = m_dir.filePath(QStringLiteral("rewrite-target.webm"));
+    const QString mp4Path = m_dir.filePath(QStringLiteral("rewrite-target.mp4"));
+    const QByteArray original("original contents");
+    {
+        QFile existing(mp4Path);
+        QVERIFY(existing.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        existing.write(original);
+        existing.close();
+    }
+
+    backend.exportClip(QUrl::fromLocalFile(selectedPath), 0.0, 1.0);
+
+    QCOMPARE(failedSpy.count(), 1);
+    QCOMPARE(doneSpy.count(), 0);
+    QVERIFY(!backend.busy());
+
+    QFile check(mp4Path);
+    QVERIFY(check.open(QIODevice::ReadOnly));
+    QCOMPARE(check.readAll(), original);
 }
 
 void BackendTests::exportStartFailureClearsBusy() {
