@@ -29,7 +29,6 @@ Item {
         ? xForTime(startSec) - handleW / 2
         : xForTime(endSec) + handleW / 2
 
-    signal rangeChanged(real startSec, real endSec)
     signal scrub(real seconds)
 
     function fmt(sec) { return Format.fmt(sec); }
@@ -210,12 +209,10 @@ Item {
             if (mode === 1) {
                 root.startSec = Math.min(t, root.endSec - minGap);
                 root.playheadSec = root.startSec;
-                root.rangeChanged(root.startSec, root.endSec);
                 root.scrub(root.startSec);
             } else if (mode === 2) {
                 root.endSec = Math.max(t, root.startSec + minGap);
                 root.playheadSec = root.endSec;
-                root.rangeChanged(root.startSec, root.endSec);
                 root.scrub(root.endSec);
             } else {
                 root.playheadSec = Math.max(root.startSec, Math.min(t, root.endSec));
