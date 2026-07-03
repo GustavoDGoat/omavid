@@ -135,6 +135,7 @@ private:
     QString formatName(const QString &path) const;
     QString mainQmlPath() const;
     void waitForBackgroundWork(Backend &backend);
+    bool installBrokenFfmpeg(const QString &dirPath);
 
     QTemporaryDir m_dir;
     QString m_videoPath;
@@ -194,6 +195,18 @@ QString BackendTests::formatName(const QString &path) const {
     if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0)
         return {};
     return QString::fromUtf8(proc.readAllStandardOutput()).trimmed();
+}
+
+// Drop an "ffmpeg" into dirPath that always fails to start (its shebang points
+// nowhere), for tests that prepend dirPath to PATH.
+bool BackendTests::installBrokenFfmpeg(const QString &dirPath) {
+    QFile fake(QDir(dirPath).filePath(QStringLiteral("ffmpeg")));
+    if (!fake.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+    fake.write("#!/definitely/missing/omacut-ffmpeg\n");
+    fake.close();
+    return fake.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                               | QFileDevice::ExeOwner);
 }
 
 QString BackendTests::mainQmlPath() const {
@@ -456,13 +469,7 @@ void BackendTests::exportStartFailureClearsBusy() {
 
     QTemporaryDir pathDir;
     QVERIFY(pathDir.isValid());
-    const QString fakeFfmpeg = pathDir.filePath(QStringLiteral("ffmpeg"));
-    QFile fake(fakeFfmpeg);
-    QVERIFY(fake.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    fake.write("#!/definitely/missing/omacut-ffmpeg\n");
-    fake.close();
-    QVERIFY(fake.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner
-                                | QFileDevice::ExeOwner));
+    QVERIFY(installBrokenFfmpeg(pathDir.path()));
 
     EnvVarGuard pathGuard("PATH");
     qputenv("PATH", QFile::encodeName(pathDir.path()) + ':' + qgetenv("PATH"));
@@ -499,13 +506,7 @@ void BackendTests::failedExportPreservesExistingFile() {
     // Force ffmpeg to fail to start, the same way exportStartFailureClearsBusy does.
     QTemporaryDir pathDir;
     QVERIFY(pathDir.isValid());
-    const QString fakeFfmpeg = pathDir.filePath(QStringLiteral("ffmpeg"));
-    QFile fake(fakeFfmpeg);
-    QVERIFY(fake.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    fake.write("#!/definitely/missing/omacut-ffmpeg\n");
-    fake.close();
-    QVERIFY(fake.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner
-                                | QFileDevice::ExeOwner));
+    QVERIFY(installBrokenFfmpeg(pathDir.path()));
 
     EnvVarGuard pathGuard("PATH");
     qputenv("PATH", QFile::encodeName(pathDir.path()) + ':' + qgetenv("PATH"));
