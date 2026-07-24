@@ -70,6 +70,34 @@ ApplicationWindow {
             player.position = Math.round(trimBar.startSec * 1000);
         player.play();
     }
+    function movePlayheadTo(seconds) {
+        if (player.priming)
+            player.finishPriming();
+        trimBar.playheadSec = seconds;
+        player.position = Math.round(seconds * 1000);
+    }
+    function seekBy(seconds) {
+        if (!win.hasVideo || backend.duration <= 0)
+            return;
+        // The playhead lives inside the trim, same as scrubbing and preview.
+        movePlayheadTo(Math.max(trimBar.startSec, Math.min(trimBar.playheadSec + seconds, trimBar.endSec)));
+    }
+    // Both edges park the playhead on themselves, so you see the frame you just
+    // trimmed to — the same thing dragging a handle does.
+    function moveTrimStartTo(seconds) {
+        if (!win.hasVideo || backend.duration <= 0)
+            return;
+        var minGap = Math.min(0.1, backend.duration);
+        trimBar.startSec = Math.max(0, Math.min(seconds, trimBar.endSec - minGap));
+        movePlayheadTo(trimBar.startSec);
+    }
+    function moveTrimEndTo(seconds) {
+        if (!win.hasVideo || backend.duration <= 0)
+            return;
+        var minGap = Math.min(0.1, backend.duration);
+        trimBar.endSec = Math.min(backend.duration, Math.max(seconds, trimBar.startSec + minGap));
+        movePlayheadTo(trimBar.endSec);
+    }
 
     Component.onCompleted: ensureAudioOutput()
     onHasVideoChanged: {
@@ -91,6 +119,69 @@ ApplicationWindow {
         context: Qt.ApplicationShortcut
         enabled: win.hasVideo
         onActivated: togglePlay()
+    }
+
+    Shortcut {
+        sequence: "Alt+Space"
+        context: Qt.ApplicationShortcut
+        enabled: win.hasVideo
+        onActivated: moveTrimStartTo(trimBar.playheadSec)
+    }
+
+    Shortcut {
+        sequence: "Left"
+        context: Qt.ApplicationShortcut
+        enabled: win.hasVideo
+        onActivated: seekBy(-5)
+    }
+
+    Shortcut {
+        sequence: "Right"
+        context: Qt.ApplicationShortcut
+        enabled: win.hasVideo
+        onActivated: seekBy(5)
+    }
+
+    Shortcut {
+        sequence: "Alt+Left"
+        context: Qt.ApplicationShortcut
+        enabled: win.hasVideo
+        onActivated: seekBy(-1)
+    }
+
+    Shortcut {
+        sequence: "Alt+Right"
+        context: Qt.ApplicationShortcut
+        enabled: win.hasVideo
+        onActivated: seekBy(1)
+    }
+
+    Shortcut {
+        sequence: "Shift+Left"
+        context: Qt.ApplicationShortcut
+        enabled: win.hasVideo
+        onActivated: moveTrimStartTo(trimBar.startSec - 5)
+    }
+
+    Shortcut {
+        sequence: "Shift+Right"
+        context: Qt.ApplicationShortcut
+        enabled: win.hasVideo
+        onActivated: moveTrimStartTo(trimBar.startSec + 5)
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Left"
+        context: Qt.ApplicationShortcut
+        enabled: win.hasVideo
+        onActivated: moveTrimEndTo(trimBar.endSec - 5)
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Right"
+        context: Qt.ApplicationShortcut
+        enabled: win.hasVideo
+        onActivated: moveTrimEndTo(trimBar.endSec + 5)
     }
 
     Shortcut {
@@ -325,6 +416,7 @@ ApplicationWindow {
 
             TrimBar {
                 id: trimBar
+                objectName: "trimBar"
                 Layout.fillWidth: true
                 durationSec: backend.duration
                 thumbCount: backend.thumbCount

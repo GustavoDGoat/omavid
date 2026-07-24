@@ -10,6 +10,11 @@ Built using **Qt Quick (QML)** UI with the Material style — the same Qt stack 
 
 - *Escape*: Open a new file to trim.
 - *Space*: Start/stop video playback.
+- *Left/Right*: Move the playhead by 5 seconds.
+- *Alt+Left/Right*: Move the playhead by 1 second.
+- *Shift+Left/Right*: Move the start of the trim by 5 seconds.
+- *Ctrl+Left/Right*: Move the end of the trim by 5 seconds.
+- *Alt+Space*: Move the start of the trim to the playhead.
 - *Return*: Export the current trim.
 - *Keypad Enter*: Export the current trim.
 

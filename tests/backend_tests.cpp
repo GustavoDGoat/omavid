@@ -7,6 +7,7 @@
 #include <QProcess>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QSignalSpy>
@@ -88,6 +89,8 @@ public:
     Q_INVOKABLE QUrl suggestedExportUrl() const { return {}; }
     Q_INVOKABLE void exportClip(const QUrl &, double, double) {}
 
+    void announceInfo() { emit infoChanged(); }
+
     int openCount = 0;
     int exportCount = 0;
     double lastStart = 0;
@@ -105,6 +108,33 @@ signals:
 private:
     QUrl m_source;
     double m_duration;
+};
+
+static QString mainQmlPath() {
+    return QFileInfo(QString::fromUtf8(__FILE__)).dir().absoluteFilePath(
+        QStringLiteral("../src/Main.qml"));
+}
+
+// Loads Main.qml against a stub backend and keeps the engine alive for as long
+// as the window is in use, so each shortcut test is just the key presses.
+class QmlHarness {
+public:
+    explicit QmlHarness(ShortcutBackend &backend) {
+        m_engine.addImageProvider(QStringLiteral("thumbs"), new ThumbProvider);
+        m_engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
+        m_engine.load(QUrl::fromLocalFile(mainQmlPath()));
+        if (!m_engine.rootObjects().isEmpty())
+            m_window = qobject_cast<QQuickWindow *>(m_engine.rootObjects().first());
+    }
+
+    QQuickWindow *window() const { return m_window; }
+    QQuickItem *trimBar() const {
+        return m_window ? m_window->findChild<QQuickItem *>(QStringLiteral("trimBar")) : nullptr;
+    }
+
+private:
+    QQmlApplicationEngine m_engine;
+    QQuickWindow *m_window = nullptr;
 };
 
 class BackendTests : public QObject {
@@ -128,12 +158,13 @@ private slots:
     void failedExportPreservesExistingFile();
     void qmlDoesNotCreateAudioOutputWithoutVideo();
     void qmlShortcutsTriggerBackendActions();
+    void qmlArrowKeysMoveThePlayhead();
+    void qmlModifierArrowsMoveTheTrimEdges();
     void trimArgsReencodeForPreciseCuts();
 
 private:
     QUrl videoUrl() const { return QUrl::fromLocalFile(m_videoPath); }
     QString formatName(const QString &path) const;
-    QString mainQmlPath() const;
     void waitForBackgroundWork(Backend &backend);
     bool installBrokenFfmpeg(const QString &dirPath);
 
@@ -207,11 +238,6 @@ bool BackendTests::installBrokenFfmpeg(const QString &dirPath) {
     fake.close();
     return fake.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner
                                | QFileDevice::ExeOwner);
-}
-
-QString BackendTests::mainQmlPath() const {
-    return QFileInfo(QString::fromUtf8(__FILE__)).dir().absoluteFilePath(
-        QStringLiteral("../src/Main.qml"));
 }
 
 void BackendTests::openDialogDelegatesToFilePicker() {
@@ -523,28 +549,20 @@ void BackendTests::failedExportPreservesExistingFile() {
 
 void BackendTests::qmlDoesNotCreateAudioOutputWithoutVideo() {
     ShortcutBackend backend(QUrl(), 0.0);
-    QQmlApplicationEngine engine;
-    engine.addImageProvider(QStringLiteral("thumbs"), new ThumbProvider);
-    engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
-    engine.load(QUrl::fromLocalFile(mainQmlPath()));
+    QmlHarness harness(backend);
 
-    QVERIFY2(!engine.rootObjects().isEmpty(), qPrintable(mainQmlPath()));
-    QObject *root = engine.rootObjects().first();
-    QVERIFY(root->property("audioOutputReady").isValid());
-    QCOMPARE(root->property("audioOutputReady").toBool(), false);
+    QVERIFY2(harness.window(), qPrintable(mainQmlPath()));
+    QVERIFY(harness.window()->property("audioOutputReady").isValid());
+    QCOMPARE(harness.window()->property("audioOutputReady").toBool(), false);
 }
 
 void BackendTests::qmlShortcutsTriggerBackendActions() {
     ShortcutBackend backend(QUrl::fromLocalFile(m_dir.filePath(QStringLiteral("shortcut-placeholder.mp4"))),
                             1.0);
-    QQmlApplicationEngine engine;
-    engine.addImageProvider(QStringLiteral("thumbs"), new ThumbProvider);
-    engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
-    engine.load(QUrl::fromLocalFile(mainQmlPath()));
+    QmlHarness harness(backend);
 
-    QVERIFY2(!engine.rootObjects().isEmpty(), qPrintable(mainQmlPath()));
-    auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
-    QVERIFY(window);
+    QVERIFY2(harness.window(), qPrintable(mainQmlPath()));
+    QQuickWindow *window = harness.window();
     QTRY_VERIFY_WITH_TIMEOUT(window->property("audioOutputReady").toBool(), 3000);
 
     window->show();
@@ -559,6 +577,87 @@ void BackendTests::qmlShortcutsTriggerBackendActions() {
 
     QTest::keyClick(window, Qt::Key_Escape);
     QTRY_COMPARE_WITH_TIMEOUT(backend.openCount, 1, 3000);
+}
+
+void BackendTests::qmlArrowKeysMoveThePlayhead() {
+    ShortcutBackend backend(QUrl::fromLocalFile(m_dir.filePath(QStringLiteral("shortcut-placeholder.mp4"))),
+                            20.0);
+    QmlHarness harness(backend);
+
+    QVERIFY2(harness.window(), qPrintable(mainQmlPath()));
+    QQuickWindow *window = harness.window();
+    QTRY_VERIFY_WITH_TIMEOUT(window->property("audioOutputReady").toBool(), 3000);
+
+    // The trim only spans the video once the backend reports what it loaded.
+    backend.announceInfo();
+    QQuickItem *trimBar = harness.trimBar();
+    QVERIFY(trimBar);
+    QCOMPARE(trimBar->property("endSec").toDouble(), 20.0);
+
+    window->show();
+    window->requestActivate();
+    QTest::qWait(100);
+
+    QTest::keyClick(window, Qt::Key_Right);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("playheadSec").toDouble(), 5.0, 3000);
+
+    QTest::keyClick(window, Qt::Key_Right, Qt::AltModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("playheadSec").toDouble(), 6.0, 3000);
+
+    QTest::keyClick(window, Qt::Key_Left, Qt::AltModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("playheadSec").toDouble(), 5.0, 3000);
+
+    // Seeking never leaves the trim, so this stops at the start instead of -5.
+    QTest::keyClick(window, Qt::Key_Left);
+    QTest::keyClick(window, Qt::Key_Left);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("playheadSec").toDouble(), 0.0, 3000);
+
+    QTest::keyClick(window, Qt::Key_Right);
+    QTest::keyClick(window, Qt::Key_Space, Qt::AltModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("startSec").toDouble(), 5.0, 3000);
+    QCOMPARE(trimBar->property("endSec").toDouble(), 20.0);
+}
+
+void BackendTests::qmlModifierArrowsMoveTheTrimEdges() {
+    ShortcutBackend backend(QUrl::fromLocalFile(m_dir.filePath(QStringLiteral("shortcut-placeholder.mp4"))),
+                            20.0);
+    QmlHarness harness(backend);
+
+    QVERIFY2(harness.window(), qPrintable(mainQmlPath()));
+    QQuickWindow *window = harness.window();
+    QTRY_VERIFY_WITH_TIMEOUT(window->property("audioOutputReady").toBool(), 3000);
+
+    backend.announceInfo();
+    QQuickItem *trimBar = harness.trimBar();
+    QVERIFY(trimBar);
+
+    window->show();
+    window->requestActivate();
+    QTest::qWait(100);
+
+    QTest::keyClick(window, Qt::Key_Right, Qt::ShiftModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("startSec").toDouble(), 5.0, 3000);
+    // The edge takes the playhead with it, like dragging the handle does.
+    QCOMPARE(trimBar->property("playheadSec").toDouble(), 5.0);
+
+    QTest::keyClick(window, Qt::Key_Left, Qt::ControlModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("endSec").toDouble(), 15.0, 3000);
+    QCOMPARE(trimBar->property("playheadSec").toDouble(), 15.0);
+
+    // Neither edge leaves the video, so these clamp at 0 and at the duration.
+    QTest::keyClick(window, Qt::Key_Left, Qt::ShiftModifier);
+    QTest::keyClick(window, Qt::Key_Left, Qt::ShiftModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("startSec").toDouble(), 0.0, 3000);
+
+    QTest::keyClick(window, Qt::Key_Right, Qt::ControlModifier);
+    QTest::keyClick(window, Qt::Key_Right, Qt::ControlModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("endSec").toDouble(), 20.0, 3000);
+
+    // And they never cross: the end stops 0.1 s past the start.
+    for (int i = 0; i < 5; ++i)
+        QTest::keyClick(window, Qt::Key_Left, Qt::ControlModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("endSec").toDouble(), 0.1, 3000);
+    QCOMPARE(trimBar->property("startSec").toDouble(), 0.0);
 }
 
 void BackendTests::trimArgsReencodeForPreciseCuts() {
