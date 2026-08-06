@@ -85,6 +85,10 @@ bool Backend::load(const QUrl &url) {
 
     // New video: drop the old filmstrip and bump the revision so QML reloads.
     stopThumbs();
+    m_thumbStart = 0.0;
+    m_thumbLen = m_info.duration;
+    m_fullThumbs = QVector<QImage>(kThumbCount);
+    m_fullThumbsComplete = false;
     m_thumbCount = kThumbCount;
     m_thumbAvailableCount = 0;
     m_thumbReadyCount = 0;
@@ -112,7 +116,7 @@ void Backend::exportDialog(double start, double end) {
 }
 
 void Backend::startThumbs() {
-    auto *worker = new ThumbWorker(m_path, m_info.duration, kThumbCount);
+    auto *worker = new ThumbWorker(m_path, m_thumbStart, m_thumbLen, kThumbCount);
     m_thumbWorker = worker;
     // Pair the pointer check with the revision: a recycled worker address could
     // otherwise let a stale queued callback write into the new filmstrip.
@@ -122,6 +126,12 @@ void Backend::startThumbs() {
         if (worker != m_thumbWorker || revision != m_thumbRevision)
             return;
         m_provider->setImage(index, image);
+        // Thumbs arrive in order, so the strip is fully cached at the last one.
+        if (m_thumbStart <= 0.0 && m_thumbLen >= m_info.duration) {
+            m_fullThumbs[index] = image;
+            if (index == kThumbCount - 1)
+                m_fullThumbsComplete = true;
+        }
         m_thumbAvailableCount = qMax(m_thumbAvailableCount, index + 1);
         if (m_thumbReadyCount == 0)
             revealNextThumb();
@@ -167,6 +177,37 @@ void Backend::stopThumbs() {
     worker->requestStop();
     worker->wait();
     delete worker;
+}
+
+void Backend::requestThumbs(double start, double end) {
+    if (m_path.isEmpty() || !m_info.ok)
+        return;
+    start = qBound(0.0, start, m_info.duration);
+    end = qBound(start, end, m_info.duration);
+    if (end - start <= 0.0 || (start == m_thumbStart && end - start == m_thumbLen))
+        return;
+
+    stopThumbs();
+    m_thumbStart = start;
+    m_thumbLen = end - start;
+    ++m_thumbRevision;
+
+    // Zooming back out: restore the cached full-length strip instantly.
+    if (start <= 0.0 && end >= m_info.duration && m_fullThumbsComplete) {
+        m_provider->setImages(m_fullThumbs);
+        m_thumbAvailableCount = kThumbCount;
+        m_thumbReadyCount = kThumbCount;
+        m_thumbWorkerDone = true;
+        emit thumbsChanged();
+        return;
+    }
+
+    m_thumbAvailableCount = 0;
+    m_thumbReadyCount = 0;
+    m_thumbWorkerDone = false;
+    m_provider->setImages(QVector<QImage>(kThumbCount));
+    emit thumbsChanged();
+    startThumbs();
 }
 
 QUrl Backend::suggestedExportUrl() const {

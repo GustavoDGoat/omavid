@@ -88,6 +88,11 @@ public:
     }
     Q_INVOKABLE QUrl suggestedExportUrl() const { return {}; }
     Q_INVOKABLE void exportClip(const QUrl &, double, double) {}
+    Q_INVOKABLE void requestThumbs(double start, double end) {
+        ++thumbRequestCount;
+        lastThumbStart = start;
+        lastThumbEnd = end;
+    }
 
     void announceInfo() { emit infoChanged(); }
 
@@ -95,6 +100,9 @@ public:
     int exportCount = 0;
     double lastStart = 0;
     double lastEnd = 0;
+    int thumbRequestCount = 0;
+    double lastThumbStart = 0;
+    double lastThumbEnd = 0;
 
 signals:
     void infoChanged();
@@ -160,6 +168,7 @@ private slots:
     void qmlShortcutsTriggerBackendActions();
     void qmlArrowKeysMoveThePlayhead();
     void qmlModifierArrowsMoveTheTrimEdges();
+    void qmlZoomFocusesTheSelection();
     void trimArgsReencodeForPreciseCuts();
 
 private:
@@ -326,7 +335,7 @@ void BackendTests::thumbnailWorkerStopsBlockedJobs() {
     EnvVarGuard pathGuard("PATH");
     qputenv("PATH", QFile::encodeName(pathDir.path()));
 
-    ThumbWorker worker(QStringLiteral("unused.mp4"), 60.0, 4);
+    ThumbWorker worker(QStringLiteral("unused.mp4"), 0.0, 60.0, 4);
     worker.start();
     QTest::qWait(100);
 
@@ -577,6 +586,14 @@ void BackendTests::qmlShortcutsTriggerBackendActions() {
 
     QTest::keyClick(window, Qt::Key_Escape);
     QTRY_COMPARE_WITH_TIMEOUT(backend.openCount, 1, 3000);
+
+    // ? toggles the hotkey overlay, and Escape closes it instead of opening
+    // a video while it is up.
+    QTest::keyClick(window, Qt::Key_Question);
+    QTRY_COMPARE_WITH_TIMEOUT(window->property("helpVisible").toBool(), true, 3000);
+    QTest::keyClick(window, Qt::Key_Escape);
+    QTRY_COMPARE_WITH_TIMEOUT(window->property("helpVisible").toBool(), false, 3000);
+    QCOMPARE(backend.openCount, 1);
 }
 
 void BackendTests::qmlArrowKeysMoveThePlayhead() {
@@ -599,20 +616,26 @@ void BackendTests::qmlArrowKeysMoveThePlayhead() {
     QTest::qWait(100);
 
     QTest::keyClick(window, Qt::Key_Right);
-    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("playheadSec").toDouble(), 5.0, 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("playheadSec").toDouble(), 1.0, 3000);
 
-    QTest::keyClick(window, Qt::Key_Right, Qt::AltModifier);
+    QTest::keyClick(window, Qt::Key_Right, Qt::ShiftModifier);
     QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("playheadSec").toDouble(), 6.0, 3000);
 
-    QTest::keyClick(window, Qt::Key_Left, Qt::AltModifier);
-    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("playheadSec").toDouble(), 5.0, 3000);
+    QTest::keyClick(window, Qt::Key_Right, Qt::AltModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("playheadSec").toDouble(), 6.2, 3000);
 
-    // Seeking never leaves the trim, so this stops at the start instead of -5.
+    QTest::keyClick(window, Qt::Key_Left, Qt::AltModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("playheadSec").toDouble(), 6.0, 3000);
+
+    QTest::keyClick(window, Qt::Key_Left, Qt::ShiftModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("playheadSec").toDouble(), 1.0, 3000);
+
+    // Seeking never leaves the trim, so this stops at the start instead of -4.
     QTest::keyClick(window, Qt::Key_Left);
-    QTest::keyClick(window, Qt::Key_Left);
+    QTest::keyClick(window, Qt::Key_Left, Qt::ShiftModifier);
     QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("playheadSec").toDouble(), 0.0, 3000);
 
-    QTest::keyClick(window, Qt::Key_Right);
+    QTest::keyClick(window, Qt::Key_Right, Qt::ShiftModifier);
     QTest::keyClick(window, Qt::Key_Space, Qt::AltModifier);
     QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("startSec").toDouble(), 5.0, 3000);
     QCOMPARE(trimBar->property("endSec").toDouble(), 20.0);
@@ -635,29 +658,75 @@ void BackendTests::qmlModifierArrowsMoveTheTrimEdges() {
     window->requestActivate();
     QTest::qWait(100);
 
-    QTest::keyClick(window, Qt::Key_Right, Qt::ShiftModifier);
-    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("startSec").toDouble(), 5.0, 3000);
-    // The edge takes the playhead with it, like dragging the handle does.
-    QCOMPARE(trimBar->property("playheadSec").toDouble(), 5.0);
-
     QTest::keyClick(window, Qt::Key_Left, Qt::ControlModifier);
     QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("endSec").toDouble(), 15.0, 3000);
+    // The edge takes the playhead with it, like dragging the handle does.
     QCOMPARE(trimBar->property("playheadSec").toDouble(), 15.0);
 
-    // Neither edge leaves the video, so these clamp at 0 and at the duration.
-    QTest::keyClick(window, Qt::Key_Left, Qt::ShiftModifier);
-    QTest::keyClick(window, Qt::Key_Left, Qt::ShiftModifier);
-    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("startSec").toDouble(), 0.0, 3000);
-
+    // The edge never leaves the video, so this clamps at the duration.
     QTest::keyClick(window, Qt::Key_Right, Qt::ControlModifier);
     QTest::keyClick(window, Qt::Key_Right, Qt::ControlModifier);
     QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("endSec").toDouble(), 20.0, 3000);
 
-    // And they never cross: the end stops 0.1 s past the start.
+    // And it never crosses the start: the end stops 0.1 s past it.
     for (int i = 0; i < 5; ++i)
         QTest::keyClick(window, Qt::Key_Left, Qt::ControlModifier);
     QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("endSec").toDouble(), 0.1, 3000);
     QCOMPARE(trimBar->property("startSec").toDouble(), 0.0);
+}
+
+void BackendTests::qmlZoomFocusesTheSelection() {
+    ShortcutBackend backend(QUrl::fromLocalFile(m_dir.filePath(QStringLiteral("shortcut-placeholder.mp4"))),
+                            20.0);
+    QmlHarness harness(backend);
+
+    QVERIFY2(harness.window(), qPrintable(mainQmlPath()));
+    QQuickWindow *window = harness.window();
+    QTRY_VERIFY_WITH_TIMEOUT(window->property("audioOutputReady").toBool(), 3000);
+
+    backend.announceInfo();
+    QQuickItem *trimBar = harness.trimBar();
+    QVERIFY(trimBar);
+
+    window->show();
+    window->requestActivate();
+    QTest::qWait(100);
+
+    // Trim to 5..15, then zoom: the selection fills 80% of the track, so the
+    // window stretches an extra eighth of the selection on each side.
+    QTest::keyClick(window, Qt::Key_Right, Qt::ShiftModifier);
+    QTest::keyClick(window, Qt::Key_Space, Qt::AltModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("startSec").toDouble(), 5.0, 3000);
+    QTest::keyClick(window, Qt::Key_Left, Qt::ControlModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("endSec").toDouble(), 15.0, 3000);
+
+    QTest::keyClick(window, Qt::Key_Z);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("zoomed").toBool(), true, 3000);
+    QCOMPARE(trimBar->property("viewStartSec").toDouble(), 3.75);
+    QCOMPARE(trimBar->property("viewEndSec").toDouble(), 16.25);
+
+    // The filmstrip regenerates for the window, so the thumbs match the zoom.
+    QCOMPARE(backend.thumbRequestCount, 1);
+    QCOMPARE(backend.lastThumbStart, 3.75);
+    QCOMPARE(backend.lastThumbEnd, 16.25);
+
+    // While zoomed, keyboard trims stop at the zoom window, not the video bounds.
+    QTest::keyClick(window, Qt::Key_Right, Qt::ControlModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("endSec").toDouble(), 16.25, 3000);
+
+    // The selection changed since the zoom, so Z zooms again instead of out.
+    QTest::keyClick(window, Qt::Key_Z);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("viewStartSec").toDouble(), 3.59375, 3000);
+    QCOMPARE(trimBar->property("viewEndSec").toDouble(), 17.65625);
+    QCOMPARE(trimBar->property("zoomed").toBool(), true);
+    QCOMPARE(backend.thumbRequestCount, 2);
+
+    // Untouched since the last zoom, so Z now zooms back out to the whole video.
+    QTest::keyClick(window, Qt::Key_Z);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("zoomed").toBool(), false, 3000);
+    QCOMPARE(backend.thumbRequestCount, 3);
+    QCOMPARE(backend.lastThumbStart, 0.0);
+    QCOMPARE(backend.lastThumbEnd, 20.0);
 }
 
 void BackendTests::trimArgsReencodeForPreciseCuts() {

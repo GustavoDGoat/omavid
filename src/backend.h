@@ -1,9 +1,11 @@
 #pragma once
 
+#include <QImage>
 #include <QObject>
 #include <QString>
 #include <QTimer>
 #include <QUrl>
+#include <QVector>
 
 #include "ffmpeg.h"
 
@@ -50,6 +52,10 @@ public:
     // Write [start, end] (seconds) of the loaded video to dst.
     Q_INVOKABLE void exportClip(const QUrl &dst, double start, double end);
 
+    // Regenerate the filmstrip for [start, end] (seconds) — used by zoom.
+    // The full-length strip is cached, so zooming back out restores instantly.
+    Q_INVOKABLE void requestThumbs(double start, double end);
+
 signals:
     void infoChanged();
     void thumbsChanged();
@@ -74,6 +80,10 @@ private:
     ffmpeg::VideoInfo m_info;
     QString m_path;
     QUrl m_source;
+    double m_thumbStart = 0.0;
+    double m_thumbLen = 0.0;
+    QVector<QImage> m_fullThumbs;
+    bool m_fullThumbsComplete = false;
     int m_thumbCount = 0;
     int m_thumbAvailableCount = 0;
     int m_thumbReadyCount = 0;

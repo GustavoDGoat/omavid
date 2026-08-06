@@ -32,7 +32,7 @@ void ThumbWorker::run() {
 
     const auto startNextJob = [this, &jobs, &nextIndex, cancel] {
         const int index = nextIndex++;
-        const double time = m_duration * (index + 0.5) / m_count;
+        const double time = m_start + m_len * (index + 0.5) / m_count;
         const QString path = m_path;
         jobs.push_back(std::async(std::launch::async, [path, time, cancel] {
             return ffmpeg::thumbnail(path, time, 90, cancel.get());

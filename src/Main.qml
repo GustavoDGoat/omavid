@@ -17,6 +17,7 @@ ApplicationWindow {
     readonly property bool audioOutputReady: audioOutput !== null
     property var audioOutput: null
     property string noticeText: ""
+    property bool helpVisible: false
     readonly property string statusText: noticeText !== "" ? noticeText : backend.status
 
     Material.theme: Material.Dark
@@ -83,19 +84,20 @@ ApplicationWindow {
         movePlayheadTo(Math.max(trimBar.startSec, Math.min(trimBar.playheadSec + seconds, trimBar.endSec)));
     }
     // Both edges park the playhead on themselves, so you see the frame you just
-    // trimmed to — the same thing dragging a handle does.
+    // trimmed to — the same thing dragging a handle does. While zoomed, the
+    // edges stop at the zoom window instead of the video bounds.
     function moveTrimStartTo(seconds) {
         if (!win.hasVideo || backend.duration <= 0)
             return;
         var minGap = Math.min(0.1, backend.duration);
-        trimBar.startSec = Math.max(0, Math.min(seconds, trimBar.endSec - minGap));
+        trimBar.startSec = Math.max(trimBar.windowStart, Math.min(seconds, trimBar.endSec - minGap));
         movePlayheadTo(trimBar.startSec);
     }
     function moveTrimEndTo(seconds) {
         if (!win.hasVideo || backend.duration <= 0)
             return;
         var minGap = Math.min(0.1, backend.duration);
-        trimBar.endSec = Math.min(backend.duration, Math.max(seconds, trimBar.startSec + minGap));
+        trimBar.endSec = Math.min(trimBar.windowEnd, Math.max(seconds, trimBar.startSec + minGap));
         movePlayheadTo(trimBar.endSec);
     }
 
@@ -132,25 +134,11 @@ ApplicationWindow {
         sequence: "Left"
         context: Qt.ApplicationShortcut
         enabled: win.hasVideo
-        onActivated: seekBy(-5)
-    }
-
-    Shortcut {
-        sequence: "Right"
-        context: Qt.ApplicationShortcut
-        enabled: win.hasVideo
-        onActivated: seekBy(5)
-    }
-
-    Shortcut {
-        sequence: "Alt+Left"
-        context: Qt.ApplicationShortcut
-        enabled: win.hasVideo
         onActivated: seekBy(-1)
     }
 
     Shortcut {
-        sequence: "Alt+Right"
+        sequence: "Right"
         context: Qt.ApplicationShortcut
         enabled: win.hasVideo
         onActivated: seekBy(1)
@@ -160,14 +148,28 @@ ApplicationWindow {
         sequence: "Shift+Left"
         context: Qt.ApplicationShortcut
         enabled: win.hasVideo
-        onActivated: moveTrimStartTo(trimBar.startSec - 5)
+        onActivated: seekBy(-5)
     }
 
     Shortcut {
         sequence: "Shift+Right"
         context: Qt.ApplicationShortcut
         enabled: win.hasVideo
-        onActivated: moveTrimStartTo(trimBar.startSec + 5)
+        onActivated: seekBy(5)
+    }
+
+    Shortcut {
+        sequence: "Alt+Left"
+        context: Qt.ApplicationShortcut
+        enabled: win.hasVideo
+        onActivated: seekBy(-0.2)
+    }
+
+    Shortcut {
+        sequence: "Alt+Right"
+        context: Qt.ApplicationShortcut
+        enabled: win.hasVideo
+        onActivated: seekBy(0.2)
     }
 
     Shortcut {
@@ -185,6 +187,16 @@ ApplicationWindow {
     }
 
     Shortcut {
+        sequence: "Z"
+        context: Qt.ApplicationShortcut
+        enabled: win.hasVideo && backend.duration > 0
+        onActivated: {
+            trimBar.toggleZoom();
+            backend.requestThumbs(trimBar.windowStart, trimBar.windowEnd);
+        }
+    }
+
+    Shortcut {
         sequences: ["Return", "Enter"]
         context: Qt.ApplicationShortcut
         enabled: win.hasVideo && backend.duration > 0 && !backend.busy
@@ -192,9 +204,20 @@ ApplicationWindow {
     }
 
     Shortcut {
+        sequence: "?"
+        context: Qt.ApplicationShortcut
+        onActivated: win.helpVisible = !win.helpVisible
+    }
+
+    Shortcut {
         sequence: "Escape"
         context: Qt.ApplicationShortcut
-        onActivated: openVideo()
+        onActivated: {
+            if (win.helpVisible)
+                win.helpVisible = false;
+            else
+                openVideo();
+        }
     }
 
     MediaPlayer {
@@ -457,10 +480,103 @@ ApplicationWindow {
             Label {
                 anchors.centerIn: parent
                 visible: win.statusText === "" && backend.duration > 0 && !trimBar.trimmingRange
-                text: Format.fmt(trimBar.endSec - trimBar.startSec)
+                textFormat: Text.StyledText
+                text: Format.fmt(trimBar.playheadSec) + " (" + Format.fmt(trimBar.endSec - trimBar.startSec) + ")"
+                    + (trimBar.zoomed ? " · <font color=\"#FFD60A\">zoomed</font>" : "")
                 color: "#d6d6da"
                 font.pixelSize: 13
                 font.family: "monospace"
+            }
+        }
+    }
+
+    // --- subtle help toggle in the corner ---
+    Rectangle {
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: 10
+        width: 24
+        height: 24
+        radius: 12
+        color: helpHover.hovered ? "#2c2c2f" : "transparent"
+
+        Text {
+            anchors.centerIn: parent
+            text: "?"
+            color: helpHover.hovered ? "white" : "#7a7a80"
+            font.pixelSize: 14
+            font.weight: Font.DemiBold
+        }
+        HoverHandler {
+            id: helpHover
+            cursorShape: Qt.PointingHandCursor
+        }
+        TapHandler {
+            onTapped: win.helpVisible = !win.helpVisible
+        }
+    }
+
+    // --- hotkey overlay ---
+    Rectangle {
+        visible: win.helpVisible
+        anchors.fill: parent
+        color: "#000000cc"
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: win.helpVisible = false
+        }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: helpColumn.width + 56
+            height: helpColumn.height + 48
+            radius: 12
+            color: "#1c1c1e"
+
+            Column {
+                id: helpColumn
+                anchors.centerIn: parent
+                spacing: 10
+
+                Label {
+                    text: "Keyboard shortcuts"
+                    color: "white"
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
+                    bottomPadding: 8
+                }
+
+                Repeater {
+                    model: [
+                        { keys: "Space", action: "Play / pause" },
+                        { keys: "← / →", action: "Move playhead 1s" },
+                        { keys: "Shift ← / →", action: "Move playhead 5s" },
+                        { keys: "Alt ← / →", action: "Move playhead 0.2s" },
+                        { keys: "Ctrl ← / →", action: "Move trim end 5s" },
+                        { keys: "Alt Space", action: "Trim start to playhead" },
+                        { keys: "Z", action: "Zoom the selection" },
+                        { keys: "Enter", action: "Export" },
+                        { keys: "Esc", action: "Open a video" },
+                        { keys: "?", action: "Show these shortcuts" }
+                    ]
+                    delegate: Row {
+                        spacing: 18
+                        Label {
+                            width: 110
+                            horizontalAlignment: Text.AlignRight
+                            text: modelData.keys
+                            color: "#FFD60A"
+                            font.pixelSize: 13
+                            font.family: "monospace"
+                        }
+                        Label {
+                            text: modelData.action
+                            color: "#d6d6da"
+                            font.pixelSize: 13
+                        }
+                    }
+                }
             }
         }
     }
@@ -475,6 +591,7 @@ ApplicationWindow {
             primeFallback.stop();
             player.priming = false;
             player.primed = false;
+            trimBar.zoomed = false;
             trimBar.startSec = 0;
             trimBar.endSec = backend.duration;
             trimBar.playheadSec = 0;

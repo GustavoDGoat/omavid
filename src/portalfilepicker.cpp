@@ -10,6 +10,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QRandomGenerator>
+#include <QStandardPaths>
 
 namespace {
 struct PortalFilterRule {
@@ -106,6 +107,11 @@ QByteArray portalPathBytes(const QString &path) {
     bytes.append('\0');
     return bytes;
 }
+
+QString openFolder() {
+    const QString videos = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+    return QDir(videos).exists() ? videos : QDir::homePath();
+}
 }
 
 PortalFilePicker::PortalFilePicker(QObject *parent) : FilePicker(parent) {
@@ -117,7 +123,7 @@ void PortalFilePicker::openVideo() {
     options.insert(QStringLiteral("accept_label"), QStringLiteral("Open"));
     options.insert(QStringLiteral("modal"), true);
     options.insert(QStringLiteral("multiple"), false);
-    options.insert(QStringLiteral("current_folder"), portalPathBytes(QDir::homePath()));
+    options.insert(QStringLiteral("current_folder"), portalPathBytes(openFolder()));
     options.insert(QStringLiteral("filters"), QVariant::fromValue(videoFilters()));
     options.insert(QStringLiteral("current_filter"), QVariant::fromValue(videoFilter()));
 

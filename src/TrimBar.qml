@@ -11,6 +11,10 @@ Item {
     property real startSec: 0
     property real endSec: 0
     property real playheadSec: 0
+    property bool zoomed: false
+    // Frozen at zoom time, so dragging a handle doesn't rescale the view under it.
+    property real viewStartSec: 0
+    property real viewEndSec: 0
     property int thumbCount: 0
     property int thumbReadyCount: 0
     property int thumbRevision: 0
@@ -22,6 +26,10 @@ Item {
     readonly property real handleW: 14
     readonly property real trackX: handleW
     readonly property real trackW: width - 2 * handleW
+    // The stretch of the video the track currently shows.
+    readonly property real windowStart: zoomed ? viewStartSec : 0
+    readonly property real windowEnd: zoomed ? viewEndSec : durationSec
+    readonly property real windowLen: Math.max(windowEnd - windowStart, 0.001)
     readonly property color accent: "#FFD60A"
     readonly property color film: "#1c1c1e"
     readonly property real activeTime: activeMode === 1 ? startSec : endSec
@@ -34,13 +42,31 @@ Item {
     function xForTime(t) {
         if (durationSec <= 0)
             return trackX;
-        return trackX + (t / durationSec) * trackW;
+        return trackX + ((t - windowStart) / windowLen) * trackW;
     }
     function timeForX(x) {
         if (trackW <= 0 || durationSec <= 0)
             return 0;
         var f = (x - trackX) / trackW;
-        return Math.max(0, Math.min(1, f)) * durationSec;
+        return windowStart + Math.max(0, Math.min(1, f)) * windowLen;
+    }
+    // Z zooms to a close-up where the selection fills 80% of the track, leaving
+    // 10% slack on each side for fine tuning. If the selection changed since the
+    // last zoom, Z zooms again on the new selection; only when zooming wouldn't
+    // get any closer does it zoom back out to the whole video.
+    function toggleZoom() {
+        if (durationSec <= 0)
+            return;
+        var slack = (endSec - startSec) / 8;
+        var newStart = Math.max(0, startSec - slack);
+        var newEnd = Math.min(durationSec, endSec + slack);
+        if (zoomed && newStart === viewStartSec && newEnd === viewEndSec) {
+            zoomed = false;
+            return;
+        }
+        viewStartSec = newStart;
+        viewEndSec = newEnd;
+        zoomed = true;
     }
 
     // ---- filmstrip ----
@@ -136,6 +162,7 @@ Item {
     // ---- playhead ----
     Rectangle {
         visible: root.durationSec > 0
+            && root.playheadSec >= root.windowStart && root.playheadSec <= root.windowEnd
         x: root.xForTime(root.playheadSec) - 1
         y: track.y
         width: 2
