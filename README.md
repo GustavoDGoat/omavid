@@ -1,6 +1,6 @@
 # Omacut
 
-A dead-simple video **length** trimmer. Open a video, drag the two yellow handles to pick a start and end, preview the clip, and export.
+A dead-simple video **length** trimmer. Open a video, drag the two handles to pick a start and end, preview the clip, and export. On Omarchy, the interface follows your theme's accent color.
 
 Built using **Qt Quick (QML)** UI with the Material style — the same Qt stack Quickshell builds on — and **ffmpeg** for the cut. The C++ side compiles to a single executable; the QML is embedded in it via Qt resources.
 
@@ -8,15 +8,17 @@ Built using **Qt Quick (QML)** UI with the Material style — the same Qt stack 
 
 ## Hotkeys
 
-- *Escape*: Open a new file to trim.
 - *Space*: Start/stop video playback.
-- *Left/Right*: Move the playhead by 5 seconds.
-- *Alt+Left/Right*: Move the playhead by 1 second.
-- *Shift+Left/Right*: Move the start of the trim by 5 seconds.
-- *Ctrl+Left/Right*: Move the end of the trim by 5 seconds.
-- *Alt+Space*: Move the start of the trim to the playhead.
-- *Return*: Export the current trim.
-- *Keypad Enter*: Export the current trim.
+- *Left/Right*: Move the playhead by 1 second.
+- *Shift+Left/Right*: Move the playhead by 5 seconds.
+- *Alt+Left/Right*: Move the playhead by 0.2 seconds.
+- *Ctrl+Space*: Move the start of the trim to the playhead.
+- *Alt+Space*: Move the end of the trim to the playhead.
+- *Z*: Zoom into the trimmed selection for fine tuning (Z again zooms back out).
+- *Ctrl+O*: Open a new file to trim.
+- *Ctrl+S*: Export the current trim.
+- *Q*: Quit (asks first if the trim hasn't been exported).
+- *?*: Show the hotkeys in the app.
 
 ## Install
 
@@ -27,7 +29,7 @@ Install via the Omarchy Package Repository via the `omacut` package. It's instal
 - `xdg-desktop-portal` and a portal backend for the file picker
 - `ffmpeg` and `ffprobe` on your PATH (used at runtime)
 
-Exports are always written as MP4 files, regardless of the input video's container.
+Exports are always written as MP4 files, regardless of the input video's container. The export dialog offers Original/1080p/720p quality — never upscaling, and always preserving the aspect ratio.
 
 ## Build
 
