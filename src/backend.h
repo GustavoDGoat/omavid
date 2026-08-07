@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QFileSystemWatcher>
 #include <QImage>
 #include <QObject>
 #include <QString>
@@ -24,6 +25,8 @@ class Backend : public QObject {
     Q_PROPERTY(int thumbRevision READ thumbRevision NOTIFY thumbsChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
+    Q_PROPERTY(QString themeAccent READ themeAccent NOTIFY themeAccentChanged)
+    Q_PROPERTY(QString themeAccentForeground READ themeAccentForeground NOTIFY themeAccentChanged)
 
 public:
     explicit Backend(ThumbProvider *provider, QObject *parent = nullptr);
@@ -38,6 +41,15 @@ public:
     int thumbRevision() const { return m_thumbRevision; }
     bool busy() const { return m_busy; }
     QString status() const { return m_status; }
+    QString themeAccent() const { return m_themeAccent; }
+    QString themeAccentForeground() const;
+
+    // The accent from an omarchy colors.toml, or the fallback when the file is
+    // missing or holds no usable accent — which is what keeps omacut working on
+    // distros without omarchy themes.
+    static QString accentFromColorsFile(const QString &path, const QString &fallback);
+    // "black" or "white", whichever stays legible on the given color.
+    static QString foregroundFor(const QString &color);
 
     // Load a video (probes it, then kicks off thumbnail generation).
     Q_INVOKABLE bool load(const QUrl &url);
@@ -49,8 +61,14 @@ public:
     // Suggested "<name>_trimmed.mp4" target next to the source.
     Q_INVOKABLE QUrl suggestedExportUrl() const;
 
-    // Write [start, end] (seconds) of the loaded video to dst.
-    Q_INVOKABLE void exportClip(const QUrl &dst, double start, double end);
+    // Write [start, end] (seconds) of the loaded video to dst. A non-zero
+    // scaleHeight downscales the shorter side to that size.
+    Q_INVOKABLE void exportClip(const QUrl &dst, double start, double end,
+                                int scaleHeight = 0);
+
+    // The downscale heights worth offering for a source: only ones strictly
+    // below the source's shorter side, so exports never upscale.
+    static QList<int> exportHeights(int width, int height);
 
     // Regenerate the filmstrip for [start, end] (seconds) — used by zoom.
     // The full-length strip is cached, so zooming back out restores instantly.
@@ -61,6 +79,7 @@ signals:
     void thumbsChanged();
     void busyChanged();
     void statusChanged();
+    void themeAccentChanged();
     void exportDone(const QString &path);
     void exportFailed(const QString &message);
     void loadError(const QString &message);
@@ -73,6 +92,8 @@ private:
     void stopThumbs();
     void revealNextThumb();
     void wireFilePicker();
+    void loadThemeAccent();
+    void watchTheme();
 
     ThumbProvider *m_provider;
     FilePicker *m_filePicker;
@@ -91,5 +112,7 @@ private:
     bool m_thumbWorkerDone = false;
     bool m_busy = false;
     QString m_status;
+    QString m_themeAccent;
     QTimer m_thumbRevealTimer;
+    QFileSystemWatcher m_themeWatcher;
 };

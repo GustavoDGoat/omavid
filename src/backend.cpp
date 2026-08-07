@@ -1,9 +1,11 @@
 #include "backend.h"
 
+#include <QColor>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
+#include <QTextStream>
 
 #include <cstdio>
 #include <memory>
@@ -16,6 +18,15 @@
 namespace {
 constexpr int kThumbCount = 12;
 constexpr int kThumbRevealMs = 70;
+const QString kDefaultAccent = QStringLiteral("#FFD60A");
+
+QString omarchyCurrentDir() {
+    return QDir::homePath() + QStringLiteral("/.local/state/omarchy/current");
+}
+
+QString omarchyColorsPath() {
+    return omarchyCurrentDir() + QStringLiteral("/theme/colors.toml");
+}
 
 QString mp4PathFor(const QString &path) {
     const QFileInfo file(path);
@@ -39,12 +50,24 @@ Backend::Backend(ThumbProvider *provider, QObject *parent)
     : Backend(provider, new PortalFilePicker(), parent) {}
 
 Backend::Backend(ThumbProvider *provider, FilePicker *filePicker, QObject *parent)
-    : QObject(parent), m_provider(provider), m_filePicker(filePicker) {
+    : QObject(parent), m_provider(provider), m_filePicker(filePicker),
+      m_themeAccent(kDefaultAccent) {
     if (!m_filePicker->parent())
         m_filePicker->setParent(this);
     wireFilePicker();
     m_thumbRevealTimer.setInterval(kThumbRevealMs);
     connect(&m_thumbRevealTimer, &QTimer::timeout, this, &Backend::revealNextThumb);
+
+    // Follow omarchy theme switches live. The theme lives behind a symlink that
+    // gets swapped, so the reload also re-arms the watch paths every time.
+    const auto themeChanged = [this] {
+        watchTheme();
+        loadThemeAccent();
+    };
+    connect(&m_themeWatcher, &QFileSystemWatcher::directoryChanged, this, themeChanged);
+    connect(&m_themeWatcher, &QFileSystemWatcher::fileChanged, this, themeChanged);
+    watchTheme();
+    loadThemeAccent();
 }
 
 Backend::~Backend() {
@@ -69,6 +92,68 @@ void Backend::setStatus(const QString &status) {
         return;
     m_status = status;
     emit statusChanged();
+}
+
+QString Backend::accentFromColorsFile(const QString &path, const QString &fallback) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return fallback;
+
+    QTextStream in(&file);
+    while (!in.atEnd()) {
+        const QString line = in.readLine().trimmed();
+        if (line.isEmpty() || line.startsWith(QLatin1Char('#')))
+            continue;
+
+        const int equals = line.indexOf(QLatin1Char('='));
+        if (equals < 0 || line.left(equals).trimmed() != QStringLiteral("accent"))
+            continue;
+
+        QString value = line.mid(equals + 1).trimmed();
+        if (value.size() >= 2
+                && ((value.front() == QLatin1Char('"') && value.back() == QLatin1Char('"'))
+                    || (value.front() == QLatin1Char('\'') && value.back() == QLatin1Char('\''))))
+            value = value.mid(1, value.size() - 2);
+
+        return QColor::fromString(value).isValid() ? value : fallback;
+    }
+    return fallback;
+}
+
+QString Backend::foregroundFor(const QString &color) {
+    const QColor parsed = QColor::fromString(color);
+    if (!parsed.isValid())
+        return QStringLiteral("black");
+    const double luminance = 0.299 * parsed.redF()
+        + 0.587 * parsed.greenF() + 0.114 * parsed.blueF();
+    return luminance < 0.5 ? QStringLiteral("white") : QStringLiteral("black");
+}
+
+QString Backend::themeAccentForeground() const {
+    return foregroundFor(m_themeAccent);
+}
+
+void Backend::loadThemeAccent() {
+    const QString accent = accentFromColorsFile(omarchyColorsPath(), kDefaultAccent);
+    if (accent == m_themeAccent)
+        return;
+    m_themeAccent = accent;
+    emit themeAccentChanged();
+}
+
+void Backend::watchTheme() {
+    const QStringList watched = m_themeWatcher.files() + m_themeWatcher.directories();
+    if (!watched.isEmpty())
+        m_themeWatcher.removePaths(watched);
+
+    const QString currentDir = omarchyCurrentDir();
+    const QString themeDir = currentDir + QStringLiteral("/theme");
+    if (QDir(currentDir).exists())
+        m_themeWatcher.addPath(currentDir);
+    if (QDir(themeDir).exists())
+        m_themeWatcher.addPath(themeDir);
+    if (QFileInfo::exists(omarchyColorsPath()))
+        m_themeWatcher.addPath(omarchyColorsPath());
 }
 
 bool Backend::load(const QUrl &url) {
@@ -112,7 +197,18 @@ void Backend::exportDialog(double start, double end) {
     if (m_path.isEmpty() || !m_info.ok)
         return;
 
-    m_filePicker->exportVideo(suggestedExportUrl(), start, end);
+    m_filePicker->exportVideo(suggestedExportUrl(), start, end,
+                              exportHeights(m_info.width, m_info.height));
+}
+
+QList<int> Backend::exportHeights(int width, int height) {
+    const int shortSide = qMin(width, height);
+    QList<int> heights;
+    for (const int candidate : {1080, 720}) {
+        if (shortSide > candidate)
+            heights << candidate;
+    }
+    return heights;
 }
 
 void Backend::startThumbs() {
@@ -218,7 +314,7 @@ QUrl Backend::suggestedExportUrl() const {
     return QUrl::fromLocalFile(target);
 }
 
-void Backend::exportClip(const QUrl &dst, double start, double end) {
+void Backend::exportClip(const QUrl &dst, double start, double end, int scaleHeight) {
     if (m_path.isEmpty() || !m_info.ok || m_busy)
         return;
 
@@ -245,23 +341,45 @@ void Backend::exportClip(const QUrl &dst, double start, double end) {
     }
 
     setBusy(true);
-    setStatus(QStringLiteral("Exporting…"));
+    setStatus(QStringLiteral("Exporting 0%"));
 
     // Encode to a sibling temp file and atomically replace the target only after
     // success, so failed/cancelled exports preserve any existing file.
     const QString tmpPath = outPath + QStringLiteral(".omacut-part.mp4");
     QFile::remove(tmpPath);
-    const QStringList args = ffmpeg::trimArgs(m_path, tmpPath, start, end);
+    const QStringList args = ffmpeg::trimArgs(m_path, tmpPath, start, end, scaleHeight);
 
     auto *proc = new QProcess(this);
     auto completed = std::make_shared<bool>(false);
-    proc->setProcessChannelMode(QProcess::MergedChannels);
+
+    // ffmpeg -progress writes key=value blocks to stdout as it encodes;
+    // out_time_us against the clip length gives the percentage.
+    const double clipLen = end - start;
+    auto progressBuf = std::make_shared<QByteArray>();
+    connect(proc, &QProcess::readyReadStandardOutput, this,
+            [this, proc, progressBuf, clipLen, completed] {
+                progressBuf->append(proc->readAllStandardOutput());
+                int newline;
+                while ((newline = progressBuf->indexOf('\n')) >= 0) {
+                    const QByteArray line = progressBuf->left(newline).trimmed();
+                    progressBuf->remove(0, newline + 1);
+                    if (*completed || !line.startsWith("out_time_us="))
+                        continue;
+                    bool ok = false;
+                    const double outSecs = line.mid(line.indexOf('=') + 1).toLongLong(&ok) / 1e6;
+                    if (!ok)
+                        continue;
+                    const int percent = qBound(0, qRound(outSecs / clipLen * 100.0), 100);
+                    setStatus(QStringLiteral("Exporting %1%").arg(percent));
+                }
+            });
+
     connect(proc, &QProcess::finished, this,
             [this, proc, outPath, tmpPath, completed](int code, QProcess::ExitStatus exitStatus) {
                 if (*completed)
                     return;
                 *completed = true;
-                const QString err = QString::fromUtf8(proc->readAll()).trimmed();
+                const QString err = QString::fromUtf8(proc->readAllStandardError()).trimmed();
                 proc->deleteLater();
                 if (exitStatus != QProcess::NormalExit || code != 0) {
                     failExport(tmpPath, err.isEmpty() ? QStringLiteral("ffmpeg trim failed.") : err);

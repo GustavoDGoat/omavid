@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QList>
 #include <QObject>
 #include <QUrl>
 
@@ -11,10 +12,14 @@ public:
     virtual ~FilePicker() = default;
 
     virtual void openVideo() = 0;
-    virtual void exportVideo(const QUrl &suggestedUrl, double start, double end) = 0;
+    // scaleHeights are the downscale choices to offer besides "Original"
+    // (e.g. {1080, 720}), matched by min(width, height) of the source.
+    virtual void exportVideo(const QUrl &suggestedUrl, double start, double end,
+                             const QList<int> &scaleHeights) = 0;
 
 signals:
     void openSelected(const QUrl &url);
-    void exportSelected(const QUrl &url, double start, double end);
+    // scaleHeight is 0 for "Original", otherwise the chosen short-side size.
+    void exportSelected(const QUrl &url, double start, double end, int scaleHeight);
     void failed(const QString &message);
 };

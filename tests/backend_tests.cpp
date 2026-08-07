@@ -28,14 +28,17 @@ public:
     QUrl lastSuggestedUrl;
     double lastStart = 0;
     double lastEnd = 0;
+    QList<int> lastScaleHeights;
 
     void openVideo() override { ++openCount; }
 
-    void exportVideo(const QUrl &suggestedUrl, double start, double end) override {
+    void exportVideo(const QUrl &suggestedUrl, double start, double end,
+                     const QList<int> &scaleHeights) override {
         ++exportCount;
         lastSuggestedUrl = suggestedUrl;
         lastStart = start;
         lastEnd = end;
+        lastScaleHeights = scaleHeights;
     }
 };
 
@@ -66,6 +69,8 @@ class ShortcutBackend : public QObject {
     Q_PROPERTY(int thumbRevision READ thumbRevision NOTIFY thumbsChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
+    Q_PROPERTY(QString themeAccent READ themeAccent NOTIFY themeAccentChanged)
+    Q_PROPERTY(QString themeAccentForeground READ themeAccentForeground NOTIFY themeAccentChanged)
 
 public:
     explicit ShortcutBackend(QUrl source, double duration, QObject *parent = nullptr)
@@ -78,6 +83,8 @@ public:
     int thumbRevision() const { return 0; }
     bool busy() const { return false; }
     QString status() const { return {}; }
+    QString themeAccent() const { return QStringLiteral("#FFD60A"); }
+    QString themeAccentForeground() const { return QStringLiteral("black"); }
 
     Q_INVOKABLE bool load(const QUrl &) { return false; }
     Q_INVOKABLE void openVideoDialog() { ++openCount; }
@@ -95,6 +102,7 @@ public:
     }
 
     void announceInfo() { emit infoChanged(); }
+    void announceExportDone() { emit exportDone(QStringLiteral("/tmp/exported.mp4")); }
 
     int openCount = 0;
     int exportCount = 0;
@@ -109,6 +117,7 @@ signals:
     void thumbsChanged();
     void busyChanged();
     void statusChanged();
+    void themeAccentChanged();
     void exportDone(const QString &path);
     void exportFailed(const QString &message);
     void loadError(const QString &message);
@@ -117,6 +126,20 @@ private:
     QUrl m_source;
     double m_duration;
 };
+
+// Finds a DialogButton by its label ("primary" tells them apart from Labels).
+static QQuickItem *dialogButton(QQuickWindow *window, const QString &text) {
+    const auto items = window->findChildren<QQuickItem *>();
+    for (QQuickItem *item : items) {
+        if (item->property("primary").isValid() && item->property("text").toString() == text)
+            return item;
+    }
+    return nullptr;
+}
+
+static QPoint itemCenter(QQuickItem *item) {
+    return item->mapToScene(QPointF(item->width() / 2, item->height() / 2)).toPoint();
+}
 
 static QString mainQmlPath() {
     return QFileInfo(QString::fromUtf8(__FILE__)).dir().absoluteFilePath(
@@ -136,6 +159,7 @@ public:
     }
 
     QQuickWindow *window() const { return m_window; }
+    QQmlApplicationEngine &engine() { return m_engine; }
     QQuickItem *trimBar() const {
         return m_window ? m_window->findChild<QQuickItem *>(QStringLiteral("trimBar")) : nullptr;
     }
@@ -167,9 +191,14 @@ private slots:
     void qmlDoesNotCreateAudioOutputWithoutVideo();
     void qmlShortcutsTriggerBackendActions();
     void qmlArrowKeysMoveThePlayhead();
-    void qmlModifierArrowsMoveTheTrimEdges();
+    void qmlSpaceChordsSetTheTrimEdges();
     void qmlZoomFocusesTheSelection();
+    void qmlQuitConfirmsUnexportedTrim();
     void trimArgsReencodeForPreciseCuts();
+    void trimArgsScaleTheShorterSide();
+    void exportHeightsNeverUpscale();
+    void themeAccentReadsOmarchyColors();
+    void themeAccentForegroundKeepsContrast();
 
 private:
     QUrl videoUrl() const { return QUrl::fromLocalFile(m_videoPath); }
@@ -391,6 +420,10 @@ void BackendTests::exportClipWritesMp4() {
     Backend backend(&provider, picker);
     QSignalSpy doneSpy(&backend, &Backend::exportDone);
     QSignalSpy failedSpy(&backend, &Backend::exportFailed);
+    QStringList statuses;
+    connect(&backend, &Backend::statusChanged, [&backend, &statuses] {
+        statuses << backend.status();
+    });
 
     QVERIFY(backend.load(videoUrl()));
     waitForBackgroundWork(backend);
@@ -400,9 +433,14 @@ void BackendTests::exportClipWritesMp4() {
     backend.exportClip(QUrl::fromLocalFile(selectedPath), 0.0, 1.0);
 
     QVERIFY(backend.busy());
+    QCOMPARE(backend.status(), QStringLiteral("Exporting 0%"));
     QTRY_VERIFY_WITH_TIMEOUT(doneSpy.count() + failedSpy.count() > 0, 20000);
 
     QCOMPARE(failedSpy.count(), 0);
+
+    // ffmpeg's -progress stream drove the status to a completed percentage.
+    QVERIFY2(statuses.contains(QStringLiteral("Exporting 100%")),
+             qPrintable(statuses.join(QStringLiteral(" | "))));
     QCOMPARE(doneSpy.count(), 1);
     QCOMPARE(doneSpy.first().at(0).toString(), mp4Path);
     QVERIFY(!backend.busy());
@@ -578,17 +616,13 @@ void BackendTests::qmlShortcutsTriggerBackendActions() {
     window->requestActivate();
     QTest::qWait(100);
 
-    QTest::keyClick(window, Qt::Key_Return);
+    QTest::keyClick(window, Qt::Key_S, Qt::ControlModifier);
     QTRY_COMPARE_WITH_TIMEOUT(backend.exportCount, 1, 3000);
 
-    QTest::keyClick(window, Qt::Key_Enter);
-    QTRY_COMPARE_WITH_TIMEOUT(backend.exportCount, 2, 3000);
-
-    QTest::keyClick(window, Qt::Key_Escape);
+    QTest::keyClick(window, Qt::Key_O, Qt::ControlModifier);
     QTRY_COMPARE_WITH_TIMEOUT(backend.openCount, 1, 3000);
 
-    // ? toggles the hotkey overlay, and Escape closes it instead of opening
-    // a video while it is up.
+    // ? toggles the hotkey overlay, and Escape closes it again.
     QTest::keyClick(window, Qt::Key_Question);
     QTRY_COMPARE_WITH_TIMEOUT(window->property("helpVisible").toBool(), true, 3000);
     QTest::keyClick(window, Qt::Key_Escape);
@@ -636,12 +670,12 @@ void BackendTests::qmlArrowKeysMoveThePlayhead() {
     QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("playheadSec").toDouble(), 0.0, 3000);
 
     QTest::keyClick(window, Qt::Key_Right, Qt::ShiftModifier);
-    QTest::keyClick(window, Qt::Key_Space, Qt::AltModifier);
+    QTest::keyClick(window, Qt::Key_Space, Qt::ControlModifier);
     QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("startSec").toDouble(), 5.0, 3000);
     QCOMPARE(trimBar->property("endSec").toDouble(), 20.0);
 }
 
-void BackendTests::qmlModifierArrowsMoveTheTrimEdges() {
+void BackendTests::qmlSpaceChordsSetTheTrimEdges() {
     ShortcutBackend backend(QUrl::fromLocalFile(m_dir.filePath(QStringLiteral("shortcut-placeholder.mp4"))),
                             20.0);
     QmlHarness harness(backend);
@@ -658,21 +692,24 @@ void BackendTests::qmlModifierArrowsMoveTheTrimEdges() {
     window->requestActivate();
     QTest::qWait(100);
 
-    QTest::keyClick(window, Qt::Key_Left, Qt::ControlModifier);
+    // Park the playhead at 15 s and pull the end in to it.
+    for (int i = 0; i < 3; ++i)
+        QTest::keyClick(window, Qt::Key_Right, Qt::ShiftModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("playheadSec").toDouble(), 15.0, 3000);
+    QTest::keyClick(window, Qt::Key_Space, Qt::AltModifier);
     QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("endSec").toDouble(), 15.0, 3000);
-    // The edge takes the playhead with it, like dragging the handle does.
-    QCOMPARE(trimBar->property("playheadSec").toDouble(), 15.0);
 
-    // The edge never leaves the video, so this clamps at the duration.
-    QTest::keyClick(window, Qt::Key_Right, Qt::ControlModifier);
-    QTest::keyClick(window, Qt::Key_Right, Qt::ControlModifier);
-    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("endSec").toDouble(), 20.0, 3000);
+    // Same for the start, at 5 s.
+    QTest::keyClick(window, Qt::Key_Left, Qt::ShiftModifier);
+    QTest::keyClick(window, Qt::Key_Left, Qt::ShiftModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("playheadSec").toDouble(), 5.0, 3000);
+    QTest::keyClick(window, Qt::Key_Space, Qt::ControlModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("startSec").toDouble(), 5.0, 3000);
 
-    // And it never crosses the start: the end stops 0.1 s past it.
-    for (int i = 0; i < 5; ++i)
-        QTest::keyClick(window, Qt::Key_Left, Qt::ControlModifier);
-    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("endSec").toDouble(), 0.1, 3000);
-    QCOMPARE(trimBar->property("startSec").toDouble(), 0.0);
+    // The edges never cross: pulling the end onto the start stops 0.1 s past it.
+    QTest::keyClick(window, Qt::Key_Space, Qt::AltModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("endSec").toDouble(), 5.1, 3000);
+    QCOMPARE(trimBar->property("startSec").toDouble(), 5.0);
 }
 
 void BackendTests::qmlZoomFocusesTheSelection() {
@@ -695,9 +732,11 @@ void BackendTests::qmlZoomFocusesTheSelection() {
     // Trim to 5..15, then zoom: the selection fills 80% of the track, so the
     // window stretches an extra eighth of the selection on each side.
     QTest::keyClick(window, Qt::Key_Right, Qt::ShiftModifier);
-    QTest::keyClick(window, Qt::Key_Space, Qt::AltModifier);
+    QTest::keyClick(window, Qt::Key_Space, Qt::ControlModifier);
     QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("startSec").toDouble(), 5.0, 3000);
-    QTest::keyClick(window, Qt::Key_Left, Qt::ControlModifier);
+    QTest::keyClick(window, Qt::Key_Right, Qt::ShiftModifier);
+    QTest::keyClick(window, Qt::Key_Right, Qt::ShiftModifier);
+    QTest::keyClick(window, Qt::Key_Space, Qt::AltModifier);
     QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("endSec").toDouble(), 15.0, 3000);
 
     QTest::keyClick(window, Qt::Key_Z);
@@ -710,14 +749,15 @@ void BackendTests::qmlZoomFocusesTheSelection() {
     QCOMPARE(backend.lastThumbStart, 3.75);
     QCOMPARE(backend.lastThumbEnd, 16.25);
 
-    // While zoomed, keyboard trims stop at the zoom window, not the video bounds.
-    QTest::keyClick(window, Qt::Key_Right, Qt::ControlModifier);
-    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("endSec").toDouble(), 16.25, 3000);
+    // Tighten the trim while zoomed: end to the playhead at 10 s.
+    QTest::keyClick(window, Qt::Key_Left, Qt::ShiftModifier);
+    QTest::keyClick(window, Qt::Key_Space, Qt::AltModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("endSec").toDouble(), 10.0, 3000);
 
     // The selection changed since the zoom, so Z zooms again instead of out.
     QTest::keyClick(window, Qt::Key_Z);
-    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("viewStartSec").toDouble(), 3.59375, 3000);
-    QCOMPARE(trimBar->property("viewEndSec").toDouble(), 17.65625);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("viewStartSec").toDouble(), 4.375, 3000);
+    QCOMPARE(trimBar->property("viewEndSec").toDouble(), 10.625);
     QCOMPARE(trimBar->property("zoomed").toBool(), true);
     QCOMPARE(backend.thumbRequestCount, 2);
 
@@ -729,6 +769,90 @@ void BackendTests::qmlZoomFocusesTheSelection() {
     QCOMPARE(backend.lastThumbEnd, 20.0);
 }
 
+void BackendTests::qmlQuitConfirmsUnexportedTrim() {
+    ShortcutBackend backend(QUrl::fromLocalFile(m_dir.filePath(QStringLiteral("shortcut-placeholder.mp4"))),
+                            20.0);
+    QmlHarness harness(backend);
+
+    QVERIFY2(harness.window(), qPrintable(mainQmlPath()));
+    QQuickWindow *window = harness.window();
+    QTRY_VERIFY_WITH_TIMEOUT(window->property("audioOutputReady").toBool(), 3000);
+
+    backend.announceInfo();
+    QQuickItem *trimBar = harness.trimBar();
+    QVERIFY(trimBar);
+
+    window->show();
+    window->requestActivate();
+    QTest::qWait(100);
+
+    // Trim the video, making the work unexported: Q now asks instead of quitting.
+    QTest::keyClick(window, Qt::Key_Right, Qt::ShiftModifier);
+    QTest::keyClick(window, Qt::Key_Space, Qt::ControlModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("startSec").toDouble(), 5.0, 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(window->property("trimDirty").toBool(), true, 3000);
+
+    QTest::keyClick(window, Qt::Key_Q);
+    QTRY_COMPARE_WITH_TIMEOUT(window->property("quitConfirmVisible").toBool(), true, 3000);
+
+    // Escape backs out of the confirmation.
+    QTest::keyClick(window, Qt::Key_Escape);
+    QTRY_COMPARE_WITH_TIMEOUT(window->property("quitConfirmVisible").toBool(), false, 3000);
+
+    // The dialog is keyboard-driven: arrows move between the buttons instead
+    // of seeking, and Enter presses the focused one. Right from the default
+    // Export focus wraps around to Cancel, which closes without exporting.
+    QTest::keyClick(window, Qt::Key_Q);
+    QTRY_COMPARE_WITH_TIMEOUT(window->property("quitConfirmVisible").toBool(), true, 3000);
+    QTest::keyClick(window, Qt::Key_Right);
+    QTest::keyClick(window, Qt::Key_Return);
+    QTRY_COMPARE_WITH_TIMEOUT(window->property("quitConfirmVisible").toBool(), false, 3000);
+    QCOMPARE(backend.exportCount, 0);
+    QCOMPARE(trimBar->property("playheadSec").toDouble(), 5.0);
+
+    // Enter on the default Export focus exports, as does Ctrl+S.
+    QTest::keyClick(window, Qt::Key_Q);
+    QTRY_COMPARE_WITH_TIMEOUT(window->property("quitConfirmVisible").toBool(), true, 3000);
+    QTest::keyClick(window, Qt::Key_Return);
+    QTRY_COMPARE_WITH_TIMEOUT(backend.exportCount, 1, 3000);
+    QCOMPARE(window->property("quitConfirmVisible").toBool(), false);
+
+    // The buttons work with the mouse too: Cancel dismisses, Export exports.
+    QTest::keyClick(window, Qt::Key_Q);
+    QTRY_COMPARE_WITH_TIMEOUT(window->property("quitConfirmVisible").toBool(), true, 3000);
+    QQuickItem *cancelButton = dialogButton(window, QStringLiteral("Cancel"));
+    QVERIFY(cancelButton);
+    QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, itemCenter(cancelButton));
+    QTRY_COMPARE_WITH_TIMEOUT(window->property("quitConfirmVisible").toBool(), false, 3000);
+    QCOMPARE(backend.exportCount, 1);
+
+    QTest::keyClick(window, Qt::Key_Q);
+    QTRY_COMPARE_WITH_TIMEOUT(window->property("quitConfirmVisible").toBool(), true, 3000);
+    QQuickItem *exportButton = dialogButton(window, QStringLiteral("Export"));
+    QVERIFY(exportButton);
+    QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, itemCenter(exportButton));
+    QTRY_COMPARE_WITH_TIMEOUT(backend.exportCount, 2, 3000);
+    QCOMPARE(window->property("quitConfirmVisible").toBool(), false);
+
+    // A completed export cleans the trim; changing it again re-dirties.
+    backend.announceExportDone();
+    QTRY_COMPARE_WITH_TIMEOUT(window->property("trimDirty").toBool(), false, 3000);
+    QTest::keyClick(window, Qt::Key_Right, Qt::ShiftModifier);
+    QTest::keyClick(window, Qt::Key_Space, Qt::AltModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(trimBar->property("endSec").toDouble(), 10.0, 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(window->property("trimDirty").toBool(), true, 3000);
+
+    // Confirming the quit really ends the app: the window closes instead of
+    // being re-intercepted by onClosing, and Qt.quit() is requested too.
+    QSignalSpy quitSpy(&harness.engine(), &QQmlApplicationEngine::quit);
+    QTest::keyClick(window, Qt::Key_Q);
+    QTRY_COMPARE_WITH_TIMEOUT(window->property("quitConfirmVisible").toBool(), true, 3000);
+    QTest::keyClick(window, Qt::Key_Left);
+    QTest::keyClick(window, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(!window->isVisible(), 3000);
+    QCOMPARE(quitSpy.count(), 1);
+}
+
 void BackendTests::trimArgsReencodeForPreciseCuts() {
     const QStringList args = ffmpeg::trimArgs(QStringLiteral("in.mp4"),
                                               QStringLiteral("out.mp4"),
@@ -738,6 +862,74 @@ void BackendTests::trimArgsReencodeForPreciseCuts() {
     QVERIFY(args.contains(QStringLiteral("aac")));
     QVERIFY(args.contains(QStringLiteral("+faststart")));
     QVERIFY(!args.contains(QStringLiteral("copy")));
+
+    // Progress reporting goes to stdout so the UI can show a percentage.
+    const int progressAt = args.indexOf(QStringLiteral("-progress"));
+    QVERIFY(progressAt >= 0);
+    QCOMPARE(args.value(progressAt + 1), QStringLiteral("pipe:1"));
+}
+
+void BackendTests::trimArgsScaleTheShorterSide() {
+    // No scale request, no scale filter.
+    QVERIFY(!ffmpeg::trimArgs(QStringLiteral("in.mp4"), QStringLiteral("out.mp4"), 0.0, 1.0)
+                 .contains(QStringLiteral("-vf")));
+
+    // The filter caps whichever side is shorter, keeping the aspect ratio for
+    // portrait and landscape alike.
+    const QStringList args = ffmpeg::trimArgs(QStringLiteral("in.mp4"), QStringLiteral("out.mp4"),
+                                              0.0, 1.0, 1080);
+    const int vfAt = args.indexOf(QStringLiteral("-vf"));
+    QVERIFY(vfAt >= 0);
+    QCOMPARE(args.value(vfAt + 1),
+             QStringLiteral("scale='if(gt(iw,ih),-2,1080)':'if(gt(iw,ih),1080,-2)'"));
+}
+
+void BackendTests::exportHeightsNeverUpscale() {
+    QCOMPARE(Backend::exportHeights(3840, 2160), (QList<int>{1080, 720}));
+    // Portrait sources are judged by their shorter side too.
+    QCOMPARE(Backend::exportHeights(2160, 3840), (QList<int>{1080, 720}));
+    QCOMPARE(Backend::exportHeights(1920, 1080), (QList<int>{720}));
+    // At or below a target there's nothing to gain, so it isn't offered.
+    QCOMPARE(Backend::exportHeights(1280, 720), QList<int>{});
+    QCOMPARE(Backend::exportHeights(0, 0), QList<int>{});
+}
+
+void BackendTests::themeAccentReadsOmarchyColors() {
+    const QString fallback = QStringLiteral("#FFD60A");
+    const QString colorsPath = m_dir.filePath(QStringLiteral("colors.toml"));
+
+    // No file at all — the non-omarchy case — keeps the fallback.
+    QCOMPARE(Backend::accentFromColorsFile(m_dir.filePath(QStringLiteral("missing.toml")), fallback),
+             fallback);
+
+    const auto writeColors = [&colorsPath](const char *contents) {
+        QFile file(colorsPath);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(contents);
+    };
+
+    writeColors("# omarchy theme\n"
+                "mode = \"dark\"\n"
+                "background = \"#121212\"\n"
+                "accent = \"#33ccff\"\n");
+    QCOMPARE(Backend::accentFromColorsFile(colorsPath, fallback), QStringLiteral("#33ccff"));
+
+    writeColors("accent = '#aabbcc'\n");
+    QCOMPARE(Backend::accentFromColorsFile(colorsPath, fallback), QStringLiteral("#aabbcc"));
+
+    // A value that isn't a color keeps the fallback rather than breaking bindings.
+    writeColors("accent = \"not-a-color\"\n");
+    QCOMPARE(Backend::accentFromColorsFile(colorsPath, fallback), fallback);
+
+    // As does a theme without an accent at all.
+    writeColors("background = \"#121212\"\n");
+    QCOMPARE(Backend::accentFromColorsFile(colorsPath, fallback), fallback);
+}
+
+void BackendTests::themeAccentForegroundKeepsContrast() {
+    QCOMPARE(Backend::foregroundFor(QStringLiteral("#FFD60A")), QStringLiteral("black"));
+    QCOMPARE(Backend::foregroundFor(QStringLiteral("#222266")), QStringLiteral("white"));
+    QCOMPARE(Backend::foregroundFor(QStringLiteral("garbage")), QStringLiteral("black"));
 }
 
 QTEST_MAIN(BackendTests)

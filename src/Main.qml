@@ -14,14 +14,27 @@ ApplicationWindow {
     visible: true
     title: backend.source.toString() === "" ? "omacut" : "omacut — " + fileName(backend.source)
     readonly property bool hasVideo: backend.source.toString() !== ""
+    readonly property color accent: backend.themeAccent
+    readonly property color accentForeground: backend.themeAccentForeground
     readonly property bool audioOutputReady: audioOutput !== null
     property var audioOutput: null
     property string noticeText: ""
     property bool helpVisible: false
+    property bool quitConfirmVisible: false
     readonly property string statusText: noticeText !== "" ? noticeText : backend.status
 
+    // What the last export wrote, so quitting only warns about unexported work.
+    // A trim spanning the whole video is never dirty — that's just the source.
+    property real exportedStartSec: -1
+    property real exportedEndSec: -1
+    property real pendingExportStartSec: 0
+    property real pendingExportEndSec: 0
+    readonly property bool trimDirty: hasVideo && backend.duration > 0
+        && (trimBar.startSec > 0 || trimBar.endSec < backend.duration)
+        && (trimBar.startSec !== exportedStartSec || trimBar.endSec !== exportedEndSec)
+
     Material.theme: Material.Dark
-    Material.accent: "#FFD60A"
+    Material.accent: win.accent
     color: "#0e0e10"
 
     function fileName(url) {
@@ -38,6 +51,8 @@ ApplicationWindow {
     function exportVideo() {
         if (!win.hasVideo || backend.duration <= 0 || backend.busy)
             return;
+        pendingExportStartSec = trimBar.startSec;
+        pendingExportEndSec = trimBar.endSec;
         backend.exportDialog(trimBar.startSec, trimBar.endSec);
     }
     function ensureAudioOutput() {
@@ -100,6 +115,26 @@ ApplicationWindow {
         trimBar.endSec = Math.min(trimBar.windowEnd, Math.max(seconds, trimBar.startSec + minGap));
         movePlayheadTo(trimBar.endSec);
     }
+    property bool quitting: false
+    function requestQuit() {
+        if (trimDirty) {
+            if (player.playbackState === MediaPlayer.PlayingState)
+                player.pause();
+            quitConfirmVisible = true;
+            return;
+        }
+        forceQuit();
+    }
+    // Closing the window is what reliably ends the app (quitOnLastWindowClosed);
+    // Qt.quit() alone has proven ignorable in a live session, so it's only the
+    // backstop. The quitting flag stops onClosing from re-asking on the way out.
+    function forceQuit() {
+        quitting = true;
+        player.stop();
+        releaseAudioOutput();
+        win.close();
+        Qt.quit();
+    }
 
     Component.onCompleted: ensureAudioOutput()
     onHasVideoChanged: {
@@ -110,86 +145,89 @@ ApplicationWindow {
             releaseAudioOutput();
         }
     }
-    onClosing: {
-        player.stop();
-        releaseAudioOutput();
-        Qt.quit();
+    onClosing: (close) => {
+        if (win.quitting)
+            return;
+        if (win.trimDirty) {
+            close.accepted = false;
+            if (player.playbackState === MediaPlayer.PlayingState)
+                player.pause();
+            win.quitConfirmVisible = true;
+            return;
+        }
+        forceQuit();
     }
 
+    // The playback and trim shortcuts go quiet while the quit confirmation is
+    // up — a disabled Shortcut also stops swallowing its key, which lets the
+    // dialog's own keyboard navigation receive the arrows, Space and Enter.
     Shortcut {
         sequence: "Space"
         context: Qt.ApplicationShortcut
-        enabled: win.hasVideo
+        enabled: win.hasVideo && !win.quitConfirmVisible
         onActivated: togglePlay()
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Space"
+        context: Qt.ApplicationShortcut
+        enabled: win.hasVideo && !win.quitConfirmVisible
+        onActivated: moveTrimStartTo(trimBar.playheadSec)
     }
 
     Shortcut {
         sequence: "Alt+Space"
         context: Qt.ApplicationShortcut
-        enabled: win.hasVideo
-        onActivated: moveTrimStartTo(trimBar.playheadSec)
+        enabled: win.hasVideo && !win.quitConfirmVisible
+        onActivated: moveTrimEndTo(trimBar.playheadSec)
     }
 
     Shortcut {
         sequence: "Left"
         context: Qt.ApplicationShortcut
-        enabled: win.hasVideo
+        enabled: win.hasVideo && !win.quitConfirmVisible
         onActivated: seekBy(-1)
     }
 
     Shortcut {
         sequence: "Right"
         context: Qt.ApplicationShortcut
-        enabled: win.hasVideo
+        enabled: win.hasVideo && !win.quitConfirmVisible
         onActivated: seekBy(1)
     }
 
     Shortcut {
         sequence: "Shift+Left"
         context: Qt.ApplicationShortcut
-        enabled: win.hasVideo
+        enabled: win.hasVideo && !win.quitConfirmVisible
         onActivated: seekBy(-5)
     }
 
     Shortcut {
         sequence: "Shift+Right"
         context: Qt.ApplicationShortcut
-        enabled: win.hasVideo
+        enabled: win.hasVideo && !win.quitConfirmVisible
         onActivated: seekBy(5)
     }
 
     Shortcut {
         sequence: "Alt+Left"
         context: Qt.ApplicationShortcut
-        enabled: win.hasVideo
+        enabled: win.hasVideo && !win.quitConfirmVisible
         onActivated: seekBy(-0.2)
     }
 
     Shortcut {
         sequence: "Alt+Right"
         context: Qt.ApplicationShortcut
-        enabled: win.hasVideo
+        enabled: win.hasVideo && !win.quitConfirmVisible
         onActivated: seekBy(0.2)
-    }
-
-    Shortcut {
-        sequence: "Ctrl+Left"
-        context: Qt.ApplicationShortcut
-        enabled: win.hasVideo
-        onActivated: moveTrimEndTo(trimBar.endSec - 5)
-    }
-
-    Shortcut {
-        sequence: "Ctrl+Right"
-        context: Qt.ApplicationShortcut
-        enabled: win.hasVideo
-        onActivated: moveTrimEndTo(trimBar.endSec + 5)
     }
 
     Shortcut {
         sequence: "Z"
         context: Qt.ApplicationShortcut
-        enabled: win.hasVideo && backend.duration > 0
+        enabled: win.hasVideo && backend.duration > 0 && !win.quitConfirmVisible
         onActivated: {
             trimBar.toggleZoom();
             backend.requestThumbs(trimBar.windowStart, trimBar.windowEnd);
@@ -197,26 +235,48 @@ ApplicationWindow {
     }
 
     Shortcut {
-        sequences: ["Return", "Enter"]
+        sequence: "Ctrl+S"
         context: Qt.ApplicationShortcut
         enabled: win.hasVideo && backend.duration > 0 && !backend.busy
-        onActivated: exportVideo()
+        onActivated: {
+            win.quitConfirmVisible = false;
+            exportVideo();
+        }
+    }
+
+    Shortcut {
+        sequence: "Ctrl+O"
+        context: Qt.ApplicationShortcut
+        enabled: !win.quitConfirmVisible
+        onActivated: openVideo()
+    }
+
+    Shortcut {
+        sequence: "Q"
+        context: Qt.ApplicationShortcut
+        onActivated: {
+            if (!win.quitConfirmVisible)
+                requestQuit();
+        }
     }
 
     Shortcut {
         sequence: "?"
         context: Qt.ApplicationShortcut
-        onActivated: win.helpVisible = !win.helpVisible
+        onActivated: {
+            if (!win.quitConfirmVisible)
+                win.helpVisible = !win.helpVisible;
+        }
     }
 
     Shortcut {
         sequence: "Escape"
         context: Qt.ApplicationShortcut
         onActivated: {
-            if (win.helpVisible)
+            if (win.quitConfirmVisible)
+                win.quitConfirmVisible = false;
+            else if (win.helpVisible)
                 win.helpVisible = false;
-            else
-                openVideo();
         }
     }
 
@@ -289,6 +349,39 @@ ApplicationWindow {
         interval: 5000
         repeat: false
         onTriggered: win.noticeText = ""
+    }
+
+    component DialogButton: Rectangle {
+        id: dialogButton
+        width: dialogButtonLabel.implicitWidth + 28
+        height: 34
+        radius: 8
+
+        property string text: ""
+        property bool primary: false
+        signal clicked()
+
+        color: primary ? win.accent : "#2c2c2f"
+        border.color: activeFocus ? (primary ? win.accentForeground : win.accent) : "transparent"
+        border.width: activeFocus ? 2 : 0
+
+        Keys.onReturnPressed: clicked()
+        Keys.onEnterPressed: clicked()
+        Keys.onSpacePressed: clicked()
+
+        Label {
+            id: dialogButtonLabel
+            anchors.centerIn: parent
+            text: dialogButton.text
+            color: dialogButton.primary ? win.accentForeground : "white"
+            font.pixelSize: 13
+            font.weight: Font.DemiBold
+        }
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: dialogButton.clicked()
+        }
     }
 
     component IconButton: Rectangle {
@@ -407,14 +500,14 @@ ApplicationWindow {
                 highlighted: true
                 focusPolicy: Qt.NoFocus
                 font.pixelSize: 18
-                Material.foreground: "black"
+                Material.foreground: win.accentForeground
                 HoverHandler {
                     cursorShape: Qt.PointingHandCursor
                 }
                 contentItem: Label {
                     text: openVideoButton.text
                     font: openVideoButton.font
-                    color: "black"
+                    color: win.accentForeground
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
                 }
@@ -441,6 +534,7 @@ ApplicationWindow {
                 id: trimBar
                 objectName: "trimBar"
                 Layout.fillWidth: true
+                accent: win.accent
                 durationSec: backend.duration
                 thumbCount: backend.thumbCount
                 thumbReadyCount: backend.thumbReadyCount
@@ -469,7 +563,7 @@ ApplicationWindow {
                 width: parent.width
                 visible: win.statusText !== ""
                 text: win.statusText
-                color: win.noticeText !== "" ? "#FFD60A" : "#b8b8bc"
+                color: win.noticeText !== "" ? win.accent : "#b8b8bc"
                 font.pixelSize: 13
                 font.family: "monospace"
                 horizontalAlignment: Text.AlignHCenter
@@ -482,7 +576,7 @@ ApplicationWindow {
                 visible: win.statusText === "" && backend.duration > 0 && !trimBar.trimmingRange
                 textFormat: Text.StyledText
                 text: Format.fmt(trimBar.playheadSec) + " (" + Format.fmt(trimBar.endSec - trimBar.startSec) + ")"
-                    + (trimBar.zoomed ? " · <font color=\"#FFD60A\">zoomed</font>" : "")
+                    + (trimBar.zoomed ? " · <font color=\"" + win.accent + "\">zoomed</font>" : "")
                 color: "#d6d6da"
                 font.pixelSize: 13
                 font.family: "monospace"
@@ -553,11 +647,12 @@ ApplicationWindow {
                         { keys: "← / →", action: "Move playhead 1s" },
                         { keys: "Shift ← / →", action: "Move playhead 5s" },
                         { keys: "Alt ← / →", action: "Move playhead 0.2s" },
-                        { keys: "Ctrl ← / →", action: "Move trim end 5s" },
-                        { keys: "Alt Space", action: "Trim start to playhead" },
+                        { keys: "Ctrl Space", action: "Trim start to playhead" },
+                        { keys: "Alt Space", action: "Trim end to playhead" },
                         { keys: "Z", action: "Zoom the selection" },
-                        { keys: "Enter", action: "Export" },
-                        { keys: "Esc", action: "Open a video" },
+                        { keys: "Ctrl O", action: "Open a video" },
+                        { keys: "Ctrl S", action: "Export" },
+                        { keys: "Q", action: "Quit" },
                         { keys: "?", action: "Show these shortcuts" }
                     ]
                     delegate: Row {
@@ -566,7 +661,7 @@ ApplicationWindow {
                             width: 110
                             horizontalAlignment: Text.AlignRight
                             text: modelData.keys
-                            color: "#FFD60A"
+                            color: win.accent
                             font.pixelSize: 13
                             font.family: "monospace"
                         }
@@ -574,6 +669,91 @@ ApplicationWindow {
                             text: modelData.action
                             color: "#d6d6da"
                             font.pixelSize: 13
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- quit confirmation ---
+    Rectangle {
+        visible: win.quitConfirmVisible
+        anchors.fill: parent
+        color: "#000000cc"
+        onVisibleChanged: {
+            if (visible)
+                quitExportButton.forceActiveFocus();
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: win.quitConfirmVisible = false
+        }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: quitColumn.width + 64
+            height: quitColumn.height + 48
+            radius: 12
+            color: "#1c1c1e"
+
+            MouseArea {
+                anchors.fill: parent
+            }
+
+            Column {
+                id: quitColumn
+                anchors.centerIn: parent
+                spacing: 8
+
+                Label {
+                    text: "Unexported trim"
+                    color: "white"
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
+                }
+
+                Label {
+                    text: "Your trim hasn't been exported. Quit anyway?"
+                    color: "#d6d6da"
+                    font.pixelSize: 13
+                    bottomPadding: 12
+                }
+
+                Row {
+                    anchors.right: parent.right
+                    spacing: 10
+
+                    DialogButton {
+                        id: quitCancelButton
+                        text: "Cancel"
+                        KeyNavigation.left: quitExportButton
+                        KeyNavigation.right: quitQuitButton
+                        KeyNavigation.tab: quitQuitButton
+                        KeyNavigation.backtab: quitExportButton
+                        onClicked: win.quitConfirmVisible = false
+                    }
+                    DialogButton {
+                        id: quitQuitButton
+                        text: "Quit"
+                        KeyNavigation.left: quitCancelButton
+                        KeyNavigation.right: quitExportButton
+                        KeyNavigation.tab: quitExportButton
+                        KeyNavigation.backtab: quitCancelButton
+                        onClicked: forceQuit()
+                    }
+                    DialogButton {
+                        id: quitExportButton
+                        text: "Export"
+                        primary: true
+                        KeyNavigation.left: quitQuitButton
+                        KeyNavigation.right: quitCancelButton
+                        KeyNavigation.tab: quitCancelButton
+                        KeyNavigation.backtab: quitQuitButton
+                        onClicked: {
+                            win.quitConfirmVisible = false;
+                            exportVideo();
                         }
                     }
                 }
@@ -595,8 +775,12 @@ ApplicationWindow {
             trimBar.startSec = 0;
             trimBar.endSec = backend.duration;
             trimBar.playheadSec = 0;
+            win.exportedStartSec = -1;
+            win.exportedEndSec = -1;
         }
         function onExportDone(path) {
+            win.exportedStartSec = win.pendingExportStartSec;
+            win.exportedEndSec = win.pendingExportEndSec;
             win.showNotice("Saved " + path);
         }
         function onExportFailed(message) {

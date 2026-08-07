@@ -30,7 +30,7 @@ Item {
     readonly property real windowStart: zoomed ? viewStartSec : 0
     readonly property real windowEnd: zoomed ? viewEndSec : durationSec
     readonly property real windowLen: Math.max(windowEnd - windowStart, 0.001)
-    readonly property color accent: "#FFD60A"
+    property color accent: "#FFD60A"
     readonly property color film: "#1c1c1e"
     readonly property real activeTime: activeMode === 1 ? startSec : endSec
     readonly property real activeHandleX: activeMode === 1

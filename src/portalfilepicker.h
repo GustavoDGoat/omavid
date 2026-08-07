@@ -11,7 +11,8 @@ public:
     explicit PortalFilePicker(QObject *parent = nullptr);
 
     void openVideo() override;
-    void exportVideo(const QUrl &suggestedUrl, double start, double end) override;
+    void exportVideo(const QUrl &suggestedUrl, double start, double end,
+                     const QList<int> &scaleHeights) override;
 
 private slots:
     void handleResponse(uint response, const QVariantMap &results);

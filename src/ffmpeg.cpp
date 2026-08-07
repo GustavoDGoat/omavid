@@ -63,6 +63,9 @@ VideoInfo probe(const QString &path) {
 
     const QJsonObject stream = streams.first().toObject();
 
+    info.width = stream.value("width").toInt();
+    info.height = stream.value("height").toInt();
+
     // Duration can live on the stream or on the container.
     QString durationStr = stream.value("duration").toString();
     if (durationStr.isEmpty())
@@ -120,15 +123,24 @@ QImage thumbnail(const QString &path, double time, int height,
     return img;
 }
 
-QStringList trimArgs(const QString &src, const QString &dst, double start, double end) {
-    QStringList args = {"-y", "-loglevel", "error"};
+QStringList trimArgs(const QString &src, const QString &dst, double start, double end,
+                     int scaleHeight) {
+    // Machine-readable progress on stdout (errors stay on stderr), so the UI
+    // can show how far along the encode is.
+    QStringList args = {"-y", "-loglevel", "error", "-progress", "pipe:1"};
     // -ss before -i seeks fast; -t gives the output duration. +faststart puts
     // the moov atom up front so shared clips start playing before they finish
     // downloading.
     args << "-ss" << QString::number(start, 'f', 3)
          << "-i" << src
-         << "-t" << QString::number(qMax(end - start, 0.0), 'f', 3)
-         << "-c:v" << "libx264" << "-preset" << "veryfast"
+         << "-t" << QString::number(qMax(end - start, 0.0), 'f', 3);
+    // Cap the shorter side, judged on the decoded (rotation-applied) frame, so
+    // portrait and landscape both keep their aspect ratio. -2 keeps the other
+    // side divisible by two, which libx264 requires.
+    if (scaleHeight > 0)
+        args << "-vf"
+             << QString("scale='if(gt(iw,ih),-2,%1)':'if(gt(iw,ih),%1,-2)'").arg(scaleHeight);
+    args << "-c:v" << "libx264" << "-preset" << "veryfast"
          << "-crf" << "18" << "-c:a" << "aac"
          << "-movflags" << "+faststart"
          << dst;
