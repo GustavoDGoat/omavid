@@ -171,12 +171,27 @@ void PortalFilePicker::openVideo() {
     QVariantMap options;
     options.insert(QStringLiteral("accept_label"), QStringLiteral("Open"));
     options.insert(QStringLiteral("modal"), true);
-    options.insert(QStringLiteral("multiple"), false);
+    options.insert(QStringLiteral("multiple"), true);
     options.insert(QStringLiteral("current_folder"), portalPathBytes(openFolder()));
     options.insert(QStringLiteral("filters"), QVariant::fromValue(videoFilters()));
     options.insert(QStringLiteral("current_filter"), QVariant::fromValue(videoFilter()));
 
-    requestFile(QStringLiteral("OpenFile"), QStringLiteral("Open Video File"), options, Action::Open);
+    requestFile(QStringLiteral("OpenFile"), QStringLiteral("Open Video Files"), options, Action::Open);
+}
+
+// Adds the "Quality" combo to a save dialog when there's a real downscale to
+// offer — sources at or below 720p just export as they are.
+static void addQualityChoices(QVariantMap &options, const QList<int> &scaleHeights) {
+    if (scaleHeights.isEmpty())
+        return;
+    PortalChoiceOptions qualities = {{QStringLiteral("original"), QStringLiteral("Original")}};
+    for (const int height : scaleHeights)
+        qualities.append({QString::number(height), QStringLiteral("%1p").arg(height)});
+    options.insert(QStringLiteral("choices"),
+                   QVariant::fromValue(PortalChoices{{QStringLiteral("quality"),
+                                                      QStringLiteral("Quality"),
+                                                      qualities,
+                                                      QStringLiteral("original")}}));
 }
 
 void PortalFilePicker::exportVideo(const QUrl &suggestedUrl, double start, double end,
@@ -190,25 +205,30 @@ void PortalFilePicker::exportVideo(const QUrl &suggestedUrl, double start, doubl
     options.insert(QStringLiteral("current_name"), target.fileName());
     options.insert(QStringLiteral("filters"), QVariant::fromValue(mp4Filters()));
     options.insert(QStringLiteral("current_filter"), QVariant::fromValue(mp4Filter()));
-
-    // A "Quality" combo in the save dialog, only when there's a real downscale
-    // to offer — sources at or below 720p just export as they are.
-    if (!scaleHeights.isEmpty()) {
-        PortalChoiceOptions qualities = {{QStringLiteral("original"), QStringLiteral("Original")}};
-        for (const int height : scaleHeights)
-            qualities.append({QString::number(height), QStringLiteral("%1p").arg(height)});
-        options.insert(QStringLiteral("choices"),
-                       QVariant::fromValue(PortalChoices{{QStringLiteral("quality"),
-                                                          QStringLiteral("Quality"),
-                                                          qualities,
-                                                          QStringLiteral("original")}}));
-    }
+    addQualityChoices(options, scaleHeights);
 
     if (requestFile(QStringLiteral("SaveFile"), QStringLiteral("Save Video File"),
                     options, Action::Export)) {
         m_pendingExportStart = start;
         m_pendingExportEnd = end;
     }
+}
+
+void PortalFilePicker::exportMerged(const QUrl &suggestedUrl,
+                                    const QList<int> &scaleHeights) {
+    const QFileInfo target(suggestedUrl.toLocalFile());
+
+    QVariantMap options;
+    options.insert(QStringLiteral("accept_label"), QStringLiteral("Merge"));
+    options.insert(QStringLiteral("modal"), true);
+    options.insert(QStringLiteral("current_folder"), portalPathBytes(target.absolutePath()));
+    options.insert(QStringLiteral("current_name"), target.fileName());
+    options.insert(QStringLiteral("filters"), QVariant::fromValue(mp4Filters()));
+    options.insert(QStringLiteral("current_filter"), QVariant::fromValue(mp4Filter()));
+    addQualityChoices(options, scaleHeights);
+
+    requestFile(QStringLiteral("SaveFile"), QStringLiteral("Save Merged Video"),
+                options, Action::ExportMerged);
 }
 
 bool PortalFilePicker::connectToRequestPath(const QString &path) {
@@ -299,13 +319,18 @@ void PortalFilePicker::handleResponse(uint response, const QVariantMap &results)
     if (uris.isEmpty())
         return;
 
-    const QUrl url(uris.first());
     if (action == Action::Open) {
-        emit openSelected(url);
+        QList<QUrl> urls;
+        urls.reserve(uris.size());
+        for (const QString &uri : uris)
+            urls.append(QUrl(uri));
+        emit openSelected(urls);
         return;
     }
-    if (action != Action::Export)
+    if (action != Action::Export && action != Action::ExportMerged)
         return;
+
+    const QUrl url(uris.first());
 
     // The chosen quality rides along in the response: [("quality", "1080")],
     // with "original" (or no choices at all) meaning no downscale.
@@ -324,6 +349,11 @@ void PortalFilePicker::handleResponse(uint response, const QVariantMap &results)
                 scaleHeight = value.toInt();  // "original" parses to 0
         }
         arg.endArray();
+    }
+
+    if (action == Action::ExportMerged) {
+        emit exportMergedSelected(url, scaleHeight);
+        return;
     }
     emit exportSelected(url, start, end, scaleHeight);
 }

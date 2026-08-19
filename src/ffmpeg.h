@@ -34,6 +34,15 @@ QImage thumbnail(const QString &path, double time, int height = 90,
 QStringList trimArgs(const QString &src, const QString &dst, double start, double end,
                      int scaleHeight = 0);
 
+// Like trimArgs, but also normalizes the output (48 kHz stereo audio, yuv420p)
+// so every intermediate in a merge is byte-compatible for a lossless concat.
+QStringList mergeClipArgs(const QString &src, const QString &dst, double start, double end,
+                          int scaleHeight = 0);
+
+// Build the concat-demuxer argument list that joins the intermediates named in
+// `listPath` (one "file '...'" per line) into dst with stream copy.
+QStringList concatArgs(const QString &listPath, const QString &dst);
+
 // Locate a tool on PATH; returns empty string if missing.
 QString toolPath(const QString &tool);
 

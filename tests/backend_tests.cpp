@@ -25,10 +25,13 @@ class FakeFilePicker : public FilePicker {
 public:
     int openCount = 0;
     int exportCount = 0;
+    int mergeExportCount = 0;
     QUrl lastSuggestedUrl;
+    QUrl lastMergeSuggestedUrl;
     double lastStart = 0;
     double lastEnd = 0;
     QList<int> lastScaleHeights;
+    QList<int> lastMergeScaleHeights;
 
     void openVideo() override { ++openCount; }
 
@@ -39,6 +42,13 @@ public:
         lastStart = start;
         lastEnd = end;
         lastScaleHeights = scaleHeights;
+    }
+
+    void exportMerged(const QUrl &suggestedUrl,
+                      const QList<int> &scaleHeights) override {
+        ++mergeExportCount;
+        lastMergeSuggestedUrl = suggestedUrl;
+        lastMergeScaleHeights = scaleHeights;
     }
 };
 
@@ -71,6 +81,13 @@ class ShortcutBackend : public QObject {
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(QString themeAccent READ themeAccent NOTIFY themeAccentChanged)
     Q_PROPERTY(QString themeAccentForeground READ themeAccentForeground NOTIFY themeAccentChanged)
+    Q_PROPERTY(ClipListModel *clips READ clips CONSTANT)
+    Q_PROPERTY(int clipCount READ clipCount NOTIFY clipsChanged)
+    Q_PROPERTY(int clipRevision READ clipRevision NOTIFY clipsChanged)
+    Q_PROPERTY(bool anyClipTrimmed READ anyClipTrimmed NOTIFY clipsChanged)
+    Q_PROPERTY(int currentIndex READ currentIndex NOTIFY currentIndexChanged)
+    Q_PROPERTY(double clipStartSec READ clipStartSec NOTIFY currentIndexChanged)
+    Q_PROPERTY(double clipEndSec READ clipEndSec NOTIFY currentIndexChanged)
 
 public:
     explicit ShortcutBackend(QUrl source, double duration, QObject *parent = nullptr)
@@ -85,6 +102,13 @@ public:
     QString status() const { return {}; }
     QString themeAccent() const { return QStringLiteral("#FFD60A"); }
     QString themeAccentForeground() const { return QStringLiteral("black"); }
+    ClipListModel *clips() const { return nullptr; }
+    int clipCount() const { return m_source.isEmpty() ? 0 : 1; }
+    int clipRevision() const { return m_clipRevision; }
+    bool anyClipTrimmed() const { return m_anyTrimmed; }
+    int currentIndex() const { return m_source.isEmpty() ? -1 : 0; }
+    double clipStartSec() const { return 0.0; }
+    double clipEndSec() const { return m_duration; }
 
     Q_INVOKABLE bool load(const QUrl &) { return false; }
     Q_INVOKABLE void openVideoDialog() { ++openCount; }
@@ -100,12 +124,27 @@ public:
         lastThumbStart = start;
         lastThumbEnd = end;
     }
+    Q_INVOKABLE void setClipTrim(int, double start, double end) {
+        const bool changed = start != m_lastStart || end != m_lastEnd;
+        m_lastStart = start;
+        m_lastEnd = end;
+        m_anyTrimmed = start > 0.0 || end < m_duration;
+        if (changed) {
+            ++m_clipRevision;
+            emit clipsChanged();
+        }
+    }
+    Q_INVOKABLE void selectClip(int) {}
+    Q_INVOKABLE void removeClip(int) {}
+    Q_INVOKABLE void moveClip(int, int) {}
+    Q_INVOKABLE void exportMergeDialog() { ++mergeExportCount; }
 
     void announceInfo() { emit infoChanged(); }
     void announceExportDone() { emit exportDone(QStringLiteral("/tmp/exported.mp4")); }
 
     int openCount = 0;
     int exportCount = 0;
+    int mergeExportCount = 0;
     double lastStart = 0;
     double lastEnd = 0;
     int thumbRequestCount = 0;
@@ -118,13 +157,20 @@ signals:
     void busyChanged();
     void statusChanged();
     void themeAccentChanged();
+    void clipsChanged();
+    void currentIndexChanged();
     void exportDone(const QString &path);
+    void mergeDone(const QString &path);
     void exportFailed(const QString &message);
     void loadError(const QString &message);
 
 private:
     QUrl m_source;
     double m_duration;
+    int m_clipRevision = 0;
+    bool m_anyTrimmed = false;
+    double m_lastStart = 0.0;
+    double m_lastEnd = 0.0;
 };
 
 // Finds a DialogButton by its label ("primary" tells them apart from Labels).
@@ -176,18 +222,26 @@ private slots:
     void initTestCase();
     void openDialogDelegatesToFilePicker();
     void pickerSelectionLoadsVideo();
+    void pickerMultiSelectionAddsClips();
+    void selectRemoveReorderClips();
+    void setClipTrimMarksDirty();
     void thumbnailSlotsAreExposedImmediately();
     void thumbProviderUsesRevisionPrefixedIds();
     void thumbProviderScalesHeightOnlyRequests();
     void thumbnailWorkerStopsBlockedJobs();
     void exportDialogDelegatesSuggestedUrlAndRange();
     void suggestedExportUrlAlwaysUsesMp4();
+    void suggestedMergeUrlUsesMp4();
     void exportClipWritesMp4();
     void exportClipCanReplaceSourceFile();
     void exportZeroLengthClipFails();
     void exportRefusesRewrittenPathOverExistingFile();
     void exportStartFailureClearsBusy();
     void failedExportPreservesExistingFile();
+    void mergeClipArgsNormalizeForConcat();
+    void concatArgsStreamCopy();
+    void mergeExportHeightsUsesSmallestClip();
+    void exportMergeConcatenatesClips();
     void qmlDoesNotCreateAudioOutputWithoutVideo();
     void qmlShortcutsTriggerBackendActions();
     void qmlArrowKeysMoveThePlayhead();
@@ -208,6 +262,7 @@ private:
 
     QTemporaryDir m_dir;
     QString m_videoPath;
+    QString m_bigVideoPath;
 };
 
 void BackendTests::initTestCase() {
@@ -237,6 +292,28 @@ void BackendTests::initTestCase() {
     QCOMPARE(proc.exitStatus(), QProcess::NormalExit);
     QCOMPARE(proc.exitCode(), 0);
     QVERIFY(QFileInfo::exists(m_videoPath));
+
+    // A larger clip (short side 1440) so the merge export-height logic can be
+    // exercised with sources above 1080p. A single frame encodes in no time.
+    m_bigVideoPath = m_dir.filePath(QStringLiteral("big.mp4"));
+    QProcess bigProc;
+    bigProc.start(ffmpeg, {
+        QStringLiteral("-hide_banner"),
+        QStringLiteral("-loglevel"),
+        QStringLiteral("error"),
+        QStringLiteral("-f"),
+        QStringLiteral("lavfi"),
+        QStringLiteral("-i"),
+        QStringLiteral("testsrc=size=1920x1440:rate=1:duration=1"),
+        QStringLiteral("-pix_fmt"),
+        QStringLiteral("yuv420p"),
+        QStringLiteral("-y"),
+        m_bigVideoPath,
+    });
+    QVERIFY2(bigProc.waitForFinished(10000), qPrintable(QString::fromUtf8(bigProc.readAll())));
+    QCOMPARE(bigProc.exitStatus(), QProcess::NormalExit);
+    QCOMPARE(bigProc.exitCode(), 0);
+    QVERIFY(QFileInfo::exists(m_bigVideoPath));
 }
 
 void BackendTests::waitForBackgroundWork(Backend &backend) {
@@ -295,12 +372,83 @@ void BackendTests::pickerSelectionLoadsVideo() {
     Backend backend(&provider, picker);
     QSignalSpy infoSpy(&backend, &Backend::infoChanged);
 
-    emit picker->openSelected(videoUrl());
+    emit picker->openSelected({videoUrl()});
 
     QCOMPARE(infoSpy.count(), 1);
     QCOMPARE(backend.source(), videoUrl());
     QVERIFY(backend.duration() > 0);
     waitForBackgroundWork(backend);
+}
+
+void BackendTests::pickerMultiSelectionAddsClips() {
+    const QString secondPath = m_dir.filePath(QStringLiteral("second.mp4"));
+    QVERIFY(QFile::copy(m_videoPath, secondPath));
+
+    ThumbProvider provider;
+    auto *picker = new FakeFilePicker;
+    Backend backend(&provider, picker);
+    QSignalSpy infoSpy(&backend, &Backend::infoChanged);
+
+    emit picker->openSelected({videoUrl(), QUrl::fromLocalFile(secondPath)});
+
+    QCOMPARE(backend.clipCount(), 2);
+    QCOMPARE(backend.currentIndex(), 0);
+    QCOMPARE(backend.source(), videoUrl());
+    QCOMPARE(infoSpy.count(), 1);
+    waitForBackgroundWork(backend);
+}
+
+void BackendTests::selectRemoveReorderClips() {
+    ThumbProvider provider;
+    auto *picker = new FakeFilePicker;
+    Backend backend(&provider, picker);
+
+    QVERIFY(backend.load(videoUrl()));
+    QVERIFY(backend.load(videoUrl()));
+    QVERIFY(backend.load(videoUrl()));
+    waitForBackgroundWork(backend);
+
+    QCOMPARE(backend.clipCount(), 3);
+    QCOMPARE(backend.currentIndex(), 2);
+
+    backend.selectClip(0);
+    QCOMPARE(backend.currentIndex(), 0);
+
+    // Move the first clip to the end; the selection follows it.
+    backend.moveClip(0, 2);
+    QCOMPARE(backend.currentIndex(), 2);
+    QCOMPARE(backend.clips()->count(), 3);
+
+    // Remove the current (last) clip; its predecessor becomes current.
+    backend.removeClip(2);
+    QCOMPARE(backend.clipCount(), 2);
+    QCOMPARE(backend.currentIndex(), 1);
+
+    // Removing a clip before the current shifts the index down.
+    backend.removeClip(0);
+    QCOMPARE(backend.clipCount(), 1);
+    QCOMPARE(backend.currentIndex(), 0);
+}
+
+void BackendTests::setClipTrimMarksDirty() {
+    ThumbProvider provider;
+    auto *picker = new FakeFilePicker;
+    Backend backend(&provider, picker);
+
+    QVERIFY(backend.load(videoUrl()));
+    waitForBackgroundWork(backend);
+
+    QCOMPARE(backend.anyClipTrimmed(), false);
+    const int revision = backend.clipRevision();
+
+    backend.setClipTrim(0, 0.25, 0.75);
+    QCOMPARE(backend.clipStartSec(), 0.25);
+    QCOMPARE(backend.anyClipTrimmed(), true);
+    QVERIFY(backend.clipRevision() > revision);
+
+    // Back to the full range clears the trimmed flag.
+    backend.setClipTrim(0, 0.0, backend.duration());
+    QCOMPARE(backend.anyClipTrimmed(), false);
 }
 
 void BackendTests::thumbnailSlotsAreExposedImmediately() {
@@ -412,6 +560,103 @@ void BackendTests::suggestedExportUrlAlwaysUsesMp4() {
 
     QCOMPARE(backend.suggestedExportUrl(),
              QUrl::fromLocalFile(m_dir.filePath(QStringLiteral("renamed-source_trimmed.mp4"))));
+}
+
+void BackendTests::suggestedMergeUrlUsesMp4() {
+    const QString renamedSource = m_dir.filePath(QStringLiteral("merge-source.webm"));
+    QVERIFY(QFile::copy(m_videoPath, renamedSource));
+
+    ThumbProvider provider;
+    auto *picker = new FakeFilePicker;
+    Backend backend(&provider, picker);
+
+    QVERIFY(backend.load(QUrl::fromLocalFile(renamedSource)));
+    waitForBackgroundWork(backend);
+
+    QCOMPARE(backend.suggestedMergeUrl(),
+             QUrl::fromLocalFile(m_dir.filePath(QStringLiteral("merge-source_merged.mp4"))));
+}
+
+void BackendTests::mergeClipArgsNormalizeForConcat() {
+    const QStringList args = ffmpeg::mergeClipArgs(QStringLiteral("in.mp4"),
+                                                   QStringLiteral("out.mp4"),
+                                                   0.0, 1.0);
+    // The output options land between the codec flags and the trailing dst.
+    QCOMPARE(args.last(), QStringLiteral("out.mp4"));
+    const int dstIndex = args.size() - 1;
+    QCOMPARE(args.at(dstIndex - 6), QStringLiteral("-ar"));
+    QCOMPARE(args.at(dstIndex - 5), QStringLiteral("48000"));
+    QCOMPARE(args.at(dstIndex - 4), QStringLiteral("-ac"));
+    QCOMPARE(args.at(dstIndex - 3), QStringLiteral("2"));
+    QCOMPARE(args.at(dstIndex - 2), QStringLiteral("-pix_fmt"));
+    QCOMPARE(args.at(dstIndex - 1), QStringLiteral("yuv420p"));
+}
+
+void BackendTests::concatArgsStreamCopy() {
+    const QStringList args = ffmpeg::concatArgs(QStringLiteral("list.txt"),
+                                                QStringLiteral("out.mp4"));
+
+    QCOMPARE(args.last(), QStringLiteral("out.mp4"));
+    QVERIFY(args.contains(QStringLiteral("-f")));
+    QVERIFY(args.contains(QStringLiteral("concat")));
+    QVERIFY(args.contains(QStringLiteral("-c")));
+    QVERIFY(args.contains(QStringLiteral("copy")));
+    QVERIFY(!args.contains(QStringLiteral("libx264")));
+}
+
+void BackendTests::mergeExportHeightsUsesSmallestClip() {
+    ThumbProvider provider;
+    auto *picker = new FakeFilePicker;
+    Backend backend(&provider, picker);
+
+    // The 32x32 clip caps everything, so nothing is offered.
+    QVERIFY(backend.load(videoUrl()));
+    QVERIFY(backend.load(QUrl::fromLocalFile(m_bigVideoPath)));
+    waitForBackgroundWork(backend);
+    QCOMPARE(backend.mergeExportHeights(), QList<int>{});
+
+    // Two 1440p-short-side clips: both 1080 and 720 downscale safely.
+    ThumbProvider provider2;
+    auto *picker2 = new FakeFilePicker;
+    Backend bigBackend(&provider2, picker2);
+    QVERIFY(bigBackend.load(QUrl::fromLocalFile(m_bigVideoPath)));
+    QVERIFY(bigBackend.load(QUrl::fromLocalFile(m_bigVideoPath)));
+    waitForBackgroundWork(bigBackend);
+    QCOMPARE(bigBackend.mergeExportHeights(), (QList<int>{1080, 720}));
+}
+
+void BackendTests::exportMergeConcatenatesClips() {
+    ThumbProvider provider;
+    auto *picker = new FakeFilePicker;
+    Backend backend(&provider, picker);
+    QSignalSpy doneSpy(&backend, &Backend::mergeDone);
+    QSignalSpy failedSpy(&backend, &Backend::exportFailed);
+
+    QVERIFY(backend.load(videoUrl()));
+    waitForBackgroundWork(backend);
+    QVERIFY(backend.load(videoUrl()));
+    waitForBackgroundWork(backend);
+    QCOMPARE(backend.clipCount(), 2);
+
+    const QString outPath = m_dir.filePath(QStringLiteral("merged.mp4"));
+    backend.exportMerge(QUrl::fromLocalFile(outPath), 0);
+
+    QVERIFY(backend.busy());
+    QTRY_VERIFY_WITH_TIMEOUT(doneSpy.count() + failedSpy.count() > 0, 30000);
+    QCOMPARE(failedSpy.count(), 0);
+    QCOMPARE(doneSpy.count(), 1);
+    QCOMPARE(doneSpy.first().at(0).toString(), outPath);
+    QVERIFY(QFileInfo::exists(outPath));
+    QVERIFY(!backend.busy());
+
+    const ffmpeg::VideoInfo info = ffmpeg::probe(outPath);
+    QVERIFY(info.ok);
+    QVERIFY2(info.duration > 1.8 && info.duration < 2.2,
+             qPrintable(QStringLiteral("merged duration %1").arg(info.duration)));
+    QVERIFY2(formatName(outPath).contains(QStringLiteral("mp4")),
+             qPrintable(formatName(outPath)));
+    QVERIFY(!QFileInfo::exists(outPath + QStringLiteral(".omacut-part.mp4")));
+    QVERIFY(!QFileInfo::exists(outPath + QStringLiteral(".omacut-merge")));
 }
 
 void BackendTests::exportClipWritesMp4() {

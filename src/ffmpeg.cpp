@@ -147,4 +147,34 @@ QStringList trimArgs(const QString &src, const QString &dst, double start, doubl
     return args;
 }
 
+QStringList mergeClipArgs(const QString &src, const QString &dst, double start, double end,
+                          int scaleHeight) {
+    QStringList args = trimArgs(src, dst, start, end, scaleHeight);
+    // Normalize for concat compatibility: a mix of source sample rates, channel
+    // counts or pixel formats would make a stream-copy concat produce broken
+    // audio or reject outright. Output options must precede the trailing dst.
+    const QStringList normalize = {
+        QStringLiteral("-ar"), QStringLiteral("48000"),
+        QStringLiteral("-ac"), QStringLiteral("2"),
+        QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+    };
+    const int dstIndex = args.size() - 1;
+    for (int i = normalize.size() - 1; i >= 0; --i)
+        args.insert(dstIndex, normalize.at(i));
+    return args;
+}
+
+QStringList concatArgs(const QString &listPath, const QString &dst) {
+    return {
+        QStringLiteral("-y"),
+        QStringLiteral("-loglevel"), QStringLiteral("error"),
+        QStringLiteral("-f"), QStringLiteral("concat"),
+        QStringLiteral("-safe"), QStringLiteral("0"),
+        QStringLiteral("-i"), listPath,
+        QStringLiteral("-c"), QStringLiteral("copy"),
+        QStringLiteral("-movflags"), QStringLiteral("+faststart"),
+        dst,
+    };
+}
+
 }  // namespace ffmpeg

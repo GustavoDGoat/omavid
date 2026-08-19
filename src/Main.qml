@@ -7,9 +7,9 @@ import "Format.js" as Format
 
 ApplicationWindow {
     id: win
-    width: 960
+    width: 1180
     height: 680
-    minimumWidth: 640
+    minimumWidth: 860
     minimumHeight: 460
     visible: true
     title: backend.source.toString() === "" ? "omacut" : "omacut — " + fileName(backend.source)
@@ -23,15 +23,16 @@ ApplicationWindow {
     property bool quitConfirmVisible: false
     readonly property string statusText: noticeText !== "" ? noticeText : backend.status
 
-    // What the last export wrote, so quitting only warns about unexported work.
-    // A trim spanning the whole video is never dirty — that's just the source.
-    property real exportedStartSec: -1
-    property real exportedEndSec: -1
-    property real pendingExportStartSec: 0
-    property real pendingExportEndSec: 0
-    readonly property bool trimDirty: hasVideo && backend.duration > 0
-        && (trimBar.startSec > 0 || trimBar.endSec < backend.duration)
-        && (trimBar.startSec !== exportedStartSec || trimBar.endSec !== exportedEndSec)
+    // Tracks unexported work across the whole playlist: a trim or a reorder
+    // bumps backend.clipRevision, and exporting records the revision it saved.
+    // Plain value (not a binding) so it snapshots the revision at export time.
+    property int lastExportedClipRevision: 0
+    readonly property bool trimDirty: hasVideo && backend.anyClipTrimmed
+        && backend.clipRevision !== lastExportedClipRevision
+
+    // Guards the write-back of the TrimBar to the model, so switching clips
+    // (which reloads the trim bar) doesn't echo the values back as edits.
+    property bool syncingTrim: false
 
     Material.theme: Material.Dark
     Material.accent: win.accent
@@ -48,12 +49,19 @@ ApplicationWindow {
     function openVideo() {
         backend.openVideoDialog();
     }
+    function pushTrim() {
+        if (!win.syncingTrim)
+            backend.setClipTrim(backend.currentIndex, trimBar.startSec, trimBar.endSec);
+    }
     function exportVideo() {
         if (!win.hasVideo || backend.duration <= 0 || backend.busy)
             return;
-        pendingExportStartSec = trimBar.startSec;
-        pendingExportEndSec = trimBar.endSec;
         backend.exportDialog(trimBar.startSec, trimBar.endSec);
+    }
+    function exportMergeVideo() {
+        if (backend.clipCount < 2 || backend.busy)
+            return;
+        backend.exportMergeDialog();
     }
     function ensureAudioOutput() {
         if (audioOutput === null && win.hasVideo)
@@ -242,6 +250,13 @@ ApplicationWindow {
             win.quitConfirmVisible = false;
             exportVideo();
         }
+    }
+
+    Shortcut {
+        sequence: "Ctrl+M"
+        context: Qt.ApplicationShortcut
+        enabled: backend.clipCount >= 2 && !backend.busy && !win.quitConfirmVisible
+        onActivated: exportMergeVideo()
     }
 
     Shortcut {
@@ -462,124 +477,276 @@ ApplicationWindow {
         }
     }
 
-    ColumnLayout {
-        anchors.fill: parent
-        anchors.margins: win.hasVideo ? 16 : 0
-        spacing: 14
+    // A tiny icon-less button for per-clip reorder/remove actions.
+    component RowButton: Rectangle {
+        id: rowButton
+        width: 22
+        height: 22
+        radius: 5
+        property string glyph: ""
+        signal clicked()
 
-        // --- video preview ---
+        color: rowHover.hovered && enabled ? "#3a3a3e" : "transparent"
+        opacity: enabled ? 1 : 0.3
+
+        HoverHandler { id: rowHover; enabled: rowButton.enabled }
+        Text {
+            anchors.centerIn: parent
+            text: rowButton.glyph
+            color: "#c0c0c4"
+            font.pixelSize: 14
+        }
+        MouseArea {
+            anchors.fill: parent
+            enabled: rowButton.enabled
+            cursorShape: Qt.PointingHandCursor
+            onClicked: rowButton.clicked()
+        }
+    }
+
+    RowLayout {
+        anchors.fill: parent
+        spacing: 0
+
+        // --- playlist sidebar ---
         Rectangle {
+            id: sidebar
+            visible: backend.clipCount > 0
+            Layout.preferredWidth: 250
+            Layout.fillHeight: true
+            color: "#141416"
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 12
+                spacing: 10
+
+                Label {
+                    text: "Videos (" + backend.clipCount + ")"
+                    color: "#d6d6da"
+                    font.pixelSize: 13
+                    font.weight: Font.DemiBold
+                }
+
+                ListView {
+                    id: clipList
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    model: backend.clips
+                    clip: true
+                    spacing: 6
+
+                    delegate: Rectangle {
+                        id: clipRow
+                        width: ListView.view.width
+                        height: 56
+                        radius: 8
+                        color: index === backend.currentIndex ? "#2c2c2f" : "transparent"
+                        border.color: index === backend.currentIndex ? win.accent : "transparent"
+                        border.width: index === backend.currentIndex ? 1 : 0
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: backend.selectClip(index)
+                        }
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 8
+                            anchors.rightMargin: 8
+                            spacing: 6
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 2
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: model.name
+                                    color: "white"
+                                    elide: Text.ElideRight
+                                    font.pixelSize: 12
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: model.trimmed
+                                        ? Format.fmt(model.startSec) + " – " + Format.fmt(model.endSec)
+                                        : Format.fmt(model.duration)
+                                    color: model.trimmed ? win.accent : "#9a9aa0"
+                                    elide: Text.ElideRight
+                                    font.pixelSize: 10
+                                    font.family: "monospace"
+                                }
+                            }
+
+                            Row {
+                                spacing: 2
+                                RowButton {
+                                    glyph: "↑"
+                                    enabled: index > 0
+                                    onClicked: backend.moveClip(index, index - 1)
+                                }
+                                RowButton {
+                                    glyph: "↓"
+                                    enabled: index < backend.clipCount - 1
+                                    onClicked: backend.moveClip(index, index + 1)
+                                }
+                                RowButton {
+                                    glyph: "×"
+                                    onClicked: backend.removeClip(index)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    Button {
+                        Layout.fillWidth: true
+                        text: "Add videos"
+                        onClicked: openVideo()
+                    }
+                    Button {
+                        Layout.fillWidth: true
+                        text: "Merge"
+                        highlighted: true
+                        Material.foreground: win.accentForeground
+                        enabled: backend.clipCount >= 2 && !backend.busy
+                        onClicked: exportMergeVideo()
+                    }
+                }
+            }
+        }
+
+        // --- main area ---
+        Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            radius: win.hasVideo ? 12 : 0
-            color: "black"
-            clip: true
 
-            VideoOutput {
-                id: videoOut
+            ColumnLayout {
                 anchors.fill: parent
-            }
-            Connections {
-                target: videoOut.videoSink
-                function onVideoFrameChanged(frame) {
-                    player.finishPriming();
+                anchors.margins: win.hasVideo ? 16 : 0
+                spacing: 14
+
+                // --- video preview ---
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    radius: win.hasVideo ? 12 : 0
+                    color: "black"
+                    clip: true
+
+                    VideoOutput {
+                        id: videoOut
+                        anchors.fill: parent
+                    }
+                    Connections {
+                        target: videoOut.videoSink
+                        function onVideoFrameChanged(frame) {
+                            player.finishPriming();
+                        }
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: openVideo()
+                    }
+
+                    Button {
+                        id: openVideoButton
+                        anchors.centerIn: parent
+                        visible: !win.hasVideo
+                        text: "Open a video"
+                        highlighted: true
+                        focusPolicy: Qt.NoFocus
+                        font.pixelSize: 18
+                        Material.foreground: win.accentForeground
+                        HoverHandler {
+                            cursorShape: Qt.PointingHandCursor
+                        }
+                        contentItem: Label {
+                            text: openVideoButton.text
+                            font: openVideoButton.font
+                            color: win.accentForeground
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        onClicked: openVideo()
+                    }
                 }
-            }
 
-            MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: openVideo()
-            }
+                // --- timeline ---
+                RowLayout {
+                    visible: win.hasVideo
+                    Layout.fillWidth: true
+                    spacing: 10
 
-            Button {
-                id: openVideoButton
-                anchors.centerIn: parent
-                visible: !win.hasVideo
-                text: "Open a video"
-                highlighted: true
-                focusPolicy: Qt.NoFocus
-                font.pixelSize: 18
-                Material.foreground: win.accentForeground
-                HoverHandler {
-                    cursorShape: Qt.PointingHandCursor
+                    IconButton {
+                        Layout.preferredWidth: 44
+                        Layout.preferredHeight: 44
+                        iconName: player.playbackState === MediaPlayer.PlayingState && !player.priming ? "pause" : "play"
+                        tipText: player.playbackState === MediaPlayer.PlayingState ? "Pause" : "Play"
+                        enabled: backend.duration > 0
+                        onClicked: togglePlay()
+                    }
+
+                    TrimBar {
+                        id: trimBar
+                        objectName: "trimBar"
+                        Layout.fillWidth: true
+                        accent: win.accent
+                        durationSec: backend.duration
+                        thumbCount: backend.thumbCount
+                        thumbReadyCount: backend.thumbReadyCount
+                        thumbRevision: backend.thumbRevision
+                        onScrub: (seconds) => player.position = Math.round(seconds * 1000)
+                    }
+
+                    IconButton {
+                        Layout.preferredWidth: 44
+                        Layout.preferredHeight: 44
+                        iconName: "download"
+                        tipText: "Export"
+                        enabled: backend.duration > 0 && !backend.busy
+                        onClicked: exportVideo()
+                    }
                 }
-                contentItem: Label {
-                    text: openVideoButton.text
-                    font: openVideoButton.font
-                    color: win.accentForeground
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+
+                // --- status line ---
+                Item {
+                    visible: win.hasVideo
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 26
+
+                    Label {
+                        anchors.centerIn: parent
+                        width: parent.width
+                        visible: win.statusText !== ""
+                        text: win.statusText
+                        color: win.noticeText !== "" ? win.accent : "#b8b8bc"
+                        font.pixelSize: 13
+                        font.family: "monospace"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideMiddle
+                    }
+
+                    Label {
+                        anchors.centerIn: parent
+                        visible: win.statusText === "" && backend.duration > 0 && !trimBar.trimmingRange
+                        textFormat: Text.StyledText
+                        text: Format.fmt(trimBar.playheadSec) + " (" + Format.fmt(trimBar.endSec - trimBar.startSec) + ")"
+                            + (trimBar.zoomed ? " · <font color=\"" + win.accent + "\">zoomed</font>" : "")
+                        color: "#d6d6da"
+                        font.pixelSize: 13
+                        font.family: "monospace"
+                    }
                 }
-                onClicked: openVideo()
-            }
-        }
-
-        // --- timeline ---
-        RowLayout {
-            visible: win.hasVideo
-            Layout.fillWidth: true
-            spacing: 10
-
-            IconButton {
-                Layout.preferredWidth: 44
-                Layout.preferredHeight: 44
-                iconName: player.playbackState === MediaPlayer.PlayingState && !player.priming ? "pause" : "play"
-                tipText: player.playbackState === MediaPlayer.PlayingState ? "Pause" : "Play"
-                enabled: backend.duration > 0
-                onClicked: togglePlay()
-            }
-
-            TrimBar {
-                id: trimBar
-                objectName: "trimBar"
-                Layout.fillWidth: true
-                accent: win.accent
-                durationSec: backend.duration
-                thumbCount: backend.thumbCount
-                thumbReadyCount: backend.thumbReadyCount
-                thumbRevision: backend.thumbRevision
-                onScrub: (seconds) => player.position = Math.round(seconds * 1000)
-            }
-
-            IconButton {
-                Layout.preferredWidth: 44
-                Layout.preferredHeight: 44
-                iconName: "download"
-                tipText: "Export"
-                enabled: backend.duration > 0 && !backend.busy
-                onClicked: exportVideo()
-            }
-        }
-
-        // --- status line ---
-        Item {
-            visible: win.hasVideo
-            Layout.fillWidth: true
-            Layout.preferredHeight: 26
-
-            Label {
-                anchors.centerIn: parent
-                width: parent.width
-                visible: win.statusText !== ""
-                text: win.statusText
-                color: win.noticeText !== "" ? win.accent : "#b8b8bc"
-                font.pixelSize: 13
-                font.family: "monospace"
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideMiddle
-            }
-
-            Label {
-                anchors.centerIn: parent
-                visible: win.statusText === "" && backend.duration > 0 && !trimBar.trimmingRange
-                textFormat: Text.StyledText
-                text: Format.fmt(trimBar.playheadSec) + " (" + Format.fmt(trimBar.endSec - trimBar.startSec) + ")"
-                    + (trimBar.zoomed ? " · <font color=\"" + win.accent + "\">zoomed</font>" : "")
-                color: "#d6d6da"
-                font.pixelSize: 13
-                font.family: "monospace"
             }
         }
     }
@@ -650,8 +817,9 @@ ApplicationWindow {
                         { keys: "Ctrl Space", action: "Trim start to playhead" },
                         { keys: "Alt Space", action: "Trim end to playhead" },
                         { keys: "Z", action: "Zoom the selection" },
-                        { keys: "Ctrl O", action: "Open a video" },
-                        { keys: "Ctrl S", action: "Export" },
+                        { keys: "Ctrl O", action: "Open videos" },
+                        { keys: "Ctrl S", action: "Export this clip" },
+                        { keys: "Ctrl M", action: "Merge and export" },
                         { keys: "Q", action: "Quit" },
                         { keys: "?", action: "Show these shortcuts" }
                     ]
@@ -762,6 +930,12 @@ ApplicationWindow {
     }
 
     Connections {
+        target: trimBar
+        function onStartSecChanged() { win.pushTrim(); }
+        function onEndSecChanged() { win.pushTrim(); }
+    }
+
+    Connections {
         target: backend
         function onInfoChanged() {
             win.noticeText = "";
@@ -772,16 +946,20 @@ ApplicationWindow {
             player.priming = false;
             player.primed = false;
             trimBar.zoomed = false;
-            trimBar.startSec = 0;
-            trimBar.endSec = backend.duration;
+            win.syncingTrim = true;
+            trimBar.startSec = backend.clipStartSec;
+            trimBar.endSec = backend.clipEndSec;
             trimBar.playheadSec = 0;
-            win.exportedStartSec = -1;
-            win.exportedEndSec = -1;
+            win.syncingTrim = false;
         }
         function onExportDone(path) {
-            win.exportedStartSec = win.pendingExportStartSec;
-            win.exportedEndSec = win.pendingExportEndSec;
             win.showNotice("Saved " + path);
+            if (backend.clipCount === 1)
+                win.lastExportedClipRevision = backend.clipRevision;
+        }
+        function onMergeDone(path) {
+            win.showNotice("Saved " + path);
+            win.lastExportedClipRevision = backend.clipRevision;
         }
         function onExportFailed(message) {
             win.showNotice("Export failed: " + message);

@@ -10,6 +10,7 @@ HEADERS += \
     ../src/ffmpeg.h \
     ../src/filepicker.h \
     ../src/portalfilepicker.h \
+    ../src/clip.h \
     ../src/thumbprovider.h \
     ../src/thumbworker.h
 
@@ -17,6 +18,7 @@ SOURCES += \
     backend_tests.cpp \
     ../src/backend.cpp \
     ../src/ffmpeg.cpp \
+    ../src/clip.cpp \
     ../src/portalfilepicker.cpp \
     ../src/thumbprovider.cpp \
     ../src/thumbworker.cpp

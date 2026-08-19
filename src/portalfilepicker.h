@@ -13,6 +13,8 @@ public:
     void openVideo() override;
     void exportVideo(const QUrl &suggestedUrl, double start, double end,
                      const QList<int> &scaleHeights) override;
+    void exportMerged(const QUrl &suggestedUrl,
+                      const QList<int> &scaleHeights) override;
 
 private slots:
     void handleResponse(uint response, const QVariantMap &results);
@@ -21,7 +23,8 @@ private:
     enum class Action {
         None,
         Open,
-        Export
+        Export,
+        ExportMerged
     };
 
     bool requestFile(const QString &method, const QString &title,

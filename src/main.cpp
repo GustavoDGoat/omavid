@@ -36,10 +36,10 @@ int main(int argc, char *argv[]) {
     if (engine.rootObjects().isEmpty())
         return -1;
 
-    // Optionally open a file passed on the command line.
+    // Optionally open files passed on the command line.
     const QStringList args = app.arguments();
-    if (args.size() > 1)
-        backend.load(QUrl::fromLocalFile(args.at(1)));
+    for (int i = 1; i < args.size(); ++i)
+        backend.load(QUrl::fromLocalFile(args.at(i)));
 
     return app.exec();
 }
