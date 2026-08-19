@@ -1,0 +1,93 @@
+#!/usr/bin/env sh
+set -eu
+
+# Builds a self-contained x86_64 AppImage of omacut. Requires network access the
+# first run (to fetch the linuxdeploy tooling); Qt6 + ffmpeg/ffprobe must already
+# be installed. ffmpeg/ffprobe are bundled into the AppImage, so it runs on any
+# x86_64 Linux without them on PATH.
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+BUILD_DIR="$ROOT/build"
+TOOLS_DIR="$BUILD_DIR/tools"
+APPDIR="$BUILD_DIR/AppDir"
+DIST_DIR="$ROOT/dist"
+
+mkdir -p "$TOOLS_DIR" "$DIST_DIR"
+
+# The final squash step needs mksquashfs (squashfs-tools). Fail early with a
+# hint instead of a cryptic appimagetool error.
+if ! command -v mksquashfs >/dev/null 2>&1; then
+  echo "mksquashfs (squashfs-tools) is required to build the AppImage." >&2
+  exit 1
+fi
+
+# The AppImage tools run fine without FUSE (and CI containers have none).
+export APPIMAGE_EXTRACT_AND_RUN=1
+# linuxdeploy's bundled binutils is older than the toolchain used to build Qt,
+# so its strip chokes on modern object files (.relr.dyn). Skipping strip keeps
+# the bundle slightly larger but avoids the failure.
+export NO_STRIP=1
+export ARCH="${ARCH:-x86_64}"
+
+fetch() {
+  name="$1"; url="$2"
+  if [ ! -x "$TOOLS_DIR/$name" ]; then
+    echo "Fetching $name..."
+    curl -fsSL -o "$TOOLS_DIR/$name" "$url"
+    chmod +x "$TOOLS_DIR/$name"
+  fi
+}
+
+fetch linuxdeploy-x86_64.AppImage \
+  https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+fetch linuxdeploy-plugin-qt-x86_64.AppImage \
+  https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+fetch appimagetool-x86_64.AppImage \
+  https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+
+# linuxdeploy discovers its plugin and appimagetool by name on PATH.
+ln -sf appimagetool-x86_64.AppImage "$TOOLS_DIR/appimagetool"
+export PATH="$TOOLS_DIR:$PATH"
+
+# Point the Qt plugin at qmake and qmlimportscanner (which live in qt6's bin dir
+# on most distros, not necessarily on PATH).
+QMAKE="$(command -v qmake6 || command -v qmake)"
+QT_BINS="$("$QMAKE" -query QT_INSTALL_BINS)"
+export QMAKE
+export PATH="$QT_BINS:$PATH"
+
+# The QML is embedded in the binary via qrc, so hand the plugin the source dir
+# to scan for imports.
+export QML_SOURCES_PATHS="$ROOT/src"
+
+# Bundle whatever Wayland platform plugins this Qt ships, so the AppImage works
+# on Wayland (e.g. Omarchy) as well as X11 (libqxcb is always included).
+EXTRA=""
+for p in "$("$QMAKE" -query QT_INSTALL_PLUGINS)"/platforms/libqwayland*.so; do
+  [ -e "$p" ] || continue
+  EXTRA="$EXTRA$(basename "$p");"
+done
+export EXTRA_PLATFORM_PLUGINS="$EXTRA"
+
+# ---- build the app ----
+"$ROOT/bin/build"
+
+# ---- assemble + bundle the AppDir ----
+rm -rf "$APPDIR"
+mkdir -p "$APPDIR"
+
+"$TOOLS_DIR/linuxdeploy-x86_64.AppImage" \
+  --appdir "$APPDIR" \
+  --executable "$BUILD_DIR/omacut" \
+  --executable "$(command -v ffmpeg)" \
+  --executable "$(command -v ffprobe)" \
+  --desktop-file "$ROOT/pkgbuild/omacut.desktop" \
+  --icon-file "$ROOT/pkgbuild/omacut.svg" \
+  --plugin qt \
+  --output appimage
+
+appimage="$(find . -maxdepth 1 -name '*.AppImage' -print -quit)"
+if [ -n "$appimage" ]; then
+  mv "$appimage" "$DIST_DIR/omacut-$ARCH.AppImage"
+  echo "Built $DIST_DIR/omacut-$ARCH.AppImage"
+fi

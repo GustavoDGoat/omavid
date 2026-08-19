@@ -29,6 +29,10 @@ Built using **Qt Quick (QML)** UI with the Material style — the same Qt stack 
 
 Install via the Omarchy Package Repository via the `omacut` package. It's installed by default in new installations of Omarchy (from Quattro forward).
 
+## Download (AppImage)
+
+A self-contained x86_64 AppImage (with ffmpeg/ffprobe bundled) is built on every push and attached to each tagged release. Grab the latest from the [Releases](https://github.com/GustavoDGoat/omavid/releases) page — no install needed, just make it executable and run it. `xdg-desktop-portal` must still be present on the host for the file picker.
+
 ## Requirements
 
 - `xdg-desktop-portal` and a portal backend for the file picker
@@ -45,6 +49,14 @@ Uses Qt's own build tool, `qmake6` (no cmake needed):
 ```
 
 This produces a single `omacut` binary in `build/`.
+
+Build the AppImage (requires `squashfs-tools`; fetches the linuxdeploy tooling on first run):
+
+```bash
+./bin/appimage
+```
+
+This produces `dist/omacut-x86_64.AppImage`.
 
 Requirements:
 
