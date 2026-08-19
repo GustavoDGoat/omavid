@@ -1,6 +1,6 @@
-# Omacut
+# Omavid
 
-A dead-simple video **length** trimmer. Open one or more videos, drag the two handles to pick a start and end for each, preview the clip, and export — either a single clip or everything merged into one MP4. On Omarchy, the interface follows your theme's accent color.
+A dead-simple video **length** trimmer and merger. Open one or more videos, drag the two handles to pick a start and end for each, preview the clip, and export — either a single clip or everything merged into one MP4. On Omarchy, the interface follows your theme's accent color.
 
 ## Merging
 
@@ -27,7 +27,7 @@ Built using **Qt Quick (QML)** UI with the Material style — the same Qt stack 
 
 ## Install
 
-Install via the Omarchy Package Repository via the `omacut` package. It's installed by default in new installations of Omarchy (from Quattro forward).
+Install via the Omarchy Package Repository via the `omavid` package. It's installed by default in new installations of Omarchy (from Quattro forward).
 
 ## Download (AppImage)
 
@@ -48,7 +48,7 @@ Uses Qt's own build tool, `qmake6` (no cmake needed):
 ./bin/build
 ```
 
-This produces a single `omacut` binary in `build/`.
+This produces a single `omavid` binary in `build/`.
 
 Build the AppImage (requires `squashfs-tools`; fetches the linuxdeploy tooling on first run):
 
@@ -56,7 +56,7 @@ Build the AppImage (requires `squashfs-tools`; fetches the linuxdeploy tooling o
 ./bin/appimage
 ```
 
-This produces `dist/omacut-x86_64.AppImage`.
+This produces `dist/omavid-x86_64.AppImage`.
 
 Requirements:
 

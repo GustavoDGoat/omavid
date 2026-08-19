@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-# Builds a self-contained x86_64 AppImage of omacut. Requires network access the
+# Builds a self-contained x86_64 AppImage of omavid. Requires network access the
 # first run (to fetch the linuxdeploy tooling); Qt6 + ffmpeg/ffprobe must already
 # be installed. ffmpeg/ffprobe are bundled into the AppImage, so it runs on any
 # x86_64 Linux without them on PATH.
@@ -78,16 +78,16 @@ mkdir -p "$APPDIR"
 
 "$TOOLS_DIR/linuxdeploy-x86_64.AppImage" \
   --appdir "$APPDIR" \
-  --executable "$BUILD_DIR/omacut" \
+  --executable "$BUILD_DIR/omavid" \
   --executable "$(command -v ffmpeg)" \
   --executable "$(command -v ffprobe)" \
-  --desktop-file "$ROOT/pkgbuild/omacut.desktop" \
-  --icon-file "$ROOT/pkgbuild/omacut.svg" \
+  --desktop-file "$ROOT/pkgbuild/omavid.desktop" \
+  --icon-file "$ROOT/pkgbuild/omavid.svg" \
   --plugin qt \
   --output appimage
 
 appimage="$(find . -maxdepth 1 -name '*.AppImage' -print -quit)"
 if [ -n "$appimage" ]; then
-  mv "$appimage" "$DIST_DIR/omacut-$ARCH.AppImage"
-  echo "Built $DIST_DIR/omacut-$ARCH.AppImage"
+  mv "$appimage" "$DIST_DIR/omavid-$ARCH.AppImage"
+  echo "Built $DIST_DIR/omavid-$ARCH.AppImage"
 fi

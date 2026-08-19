@@ -148,7 +148,7 @@ PortalFileFilters mp4Filters() {
 }
 
 QString portalToken() {
-    return QStringLiteral("omacut_%1").arg(QRandomGenerator::global()->generate());
+    return QStringLiteral("omavid_%1").arg(QRandomGenerator::global()->generate());
 }
 
 QByteArray portalPathBytes(const QString &path) {

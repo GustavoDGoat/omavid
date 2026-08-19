@@ -54,7 +54,7 @@ jobs:
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:
-          name: omacut-appimage
+          name: omavid-appimage
           path: dist/*.AppImage
           if-no-files-found: error
 

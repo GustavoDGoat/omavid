@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#2b1750"/>
+      <stop offset="0.55" stop-color="#5b1f6d"/>
+      <stop offset="1" stop-color="#8a1c4f"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe14d"/>
+      <stop offset="1" stop-color="#f0a817"/>
+    </linearGradient>
+    <pattern id="dots" width="14" height="14" patternUnits="userSpaceOnUse">
+      <circle cx="3" cy="3" r="2" fill="#ffffff" opacity="0.15"/>
+    </pattern>
+  </defs>
+
+  <!-- badge -->
+  <rect x="10" y="10" width="236" height="236" rx="54" fill="url(#bg)"/>
+  <rect x="10" y="10" width="236" height="236" rx="54" fill="url(#dots)"/>
+
+  <!-- menacing radial lines -->
+  <g stroke="#ffffff" stroke-width="3" stroke-linecap="round" opacity="0.32">
+    <line x1="40" y1="176" x2="70" y2="150"/>
+    <line x1="48" y1="188" x2="82" y2="166"/>
+    <line x1="196" y1="216" x2="182" y2="184"/>
+    <line x1="210" y1="206" x2="192" y2="172"/>
+  </g>
+
+  <!-- small outline star, bottom-left -->
+  <path d="M 67.2 214.9 L 56.1 215.7 L 52.0 226.0 L 47.9 215.7 L 36.8 214.9 L 45.3 207.8 L 42.6 197.1 L 52.0 203.0 L 61.4 197.1 L 58.7 207.8 Z"
+        fill="none" stroke="#ffffff" stroke-width="3" opacity="0.5"/>
+
+  <!-- the V: cel shadow, keyline, then gold fill -->
+  <path d="M66 78 L128 178 L190 78" fill="none" stroke="#12060f" stroke-width="60"
+        stroke-linecap="round" stroke-linejoin="round" transform="translate(7 9)"/>
+  <path d="M66 78 L128 178 L190 78" fill="none" stroke="#12060f" stroke-width="60"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M66 78 L128 178 L190 78" fill="none" stroke="url(#gold)" stroke-width="42"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- joestar-style star, top-right -->
+  <path d="M 188.0 28.0 L 194.5 45.1 L 212.7 46.0 L 198.5 57.4 L 203.3 75.0 L 188.0 65.0 L 172.7 75.0 L 177.5 57.4 L 163.3 46.0 L 181.5 45.1 Z"
+        fill="url(#gold)" stroke="#12060f" stroke-width="5" stroke-linejoin="round"/>
+</svg>

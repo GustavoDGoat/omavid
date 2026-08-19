@@ -550,7 +550,7 @@ void Backend::exportClip(const QUrl &dst, double start, double end, int scaleHei
 
     // Encode to a sibling temp file and atomically replace the target only after
     // success, so failed/cancelled exports preserve any existing file.
-    const QString tmpPath = outPath + QStringLiteral(".omacut-part.mp4");
+    const QString tmpPath = outPath + QStringLiteral(".omavid-part.mp4");
     QFile::remove(tmpPath);
     const QStringList args = ffmpeg::trimArgs(clip->path, tmpPath, start, end, scaleHeight);
     const QString ffmpegBin = ffmpeg::toolPath("ffmpeg");
@@ -632,9 +632,9 @@ void Backend::exportMerge(const QUrl &dst, int scaleHeight) {
     auto ctx = std::make_shared<MergeContext>();
     ctx->ffmpegBin = ffmpeg::toolPath("ffmpeg");
     ctx->outPath = outPath;
-    ctx->tmpDir = outPath + QStringLiteral(".omacut-merge");
+    ctx->tmpDir = outPath + QStringLiteral(".omavid-merge");
     ctx->listPath = ctx->tmpDir + QStringLiteral("/list.txt");
-    ctx->tmpPath = outPath + QStringLiteral(".omacut-part.mp4");
+    ctx->tmpPath = outPath + QStringLiteral(".omavid-part.mp4");
     QDir().mkpath(ctx->tmpDir);
 
     for (int i = 0; i < m_clips->count(); ++i) {

@@ -1,13 +1,13 @@
 # Maintainer: David Heinemeier Hansson <david@hey.com>
 
-pkgname=omacut
-pkgver=0.2.0
+pkgname=omavid
+pkgver=0.3.0
 pkgrel=1
-pkgdesc='Dead-simple video length trimmer built with Qt Quick and ffmpeg'
+pkgdesc='Dead-simple video trimmer and merger built with Qt Quick and ffmpeg'
 arch=('x86_64')
-url='https://github.com/omacom-io/omacut'
+url='https://github.com/GustavoDGoat/omavid'
 license=('MIT')
-install='omacut.install'
+install='omavid.install'
 depends=('ffmpeg' 'qt6-base' 'qt6-declarative' 'qt6-multimedia' 'xdg-desktop-portal')
 makedepends=('gcc' 'make' 'qt6-base' 'qt6-declarative' 'qt6-multimedia')
 source=()
@@ -20,8 +20,8 @@ build() {
 
 package() {
   cd "$startdir/.."
-  /usr/bin/install -Dm755 build/omacut "$pkgdir/usr/bin/omacut"
+  /usr/bin/install -Dm755 build/omavid "$pkgdir/usr/bin/omavid"
   /usr/bin/install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-  /usr/bin/install -Dm644 "$startdir/omacut.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/omacut.svg"
-  /usr/bin/install -Dm644 "$startdir/omacut.desktop" "$pkgdir/usr/share/applications/omacut.desktop"
+  /usr/bin/install -Dm644 "$startdir/omavid.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/omavid.svg"
+  /usr/bin/install -Dm644 "$startdir/omavid.desktop" "$pkgdir/usr/share/applications/omavid.desktop"
 }

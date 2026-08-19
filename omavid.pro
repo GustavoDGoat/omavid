@@ -1,7 +1,7 @@
 QT += core gui qml quick quickcontrols2 multimedia dbus
 
 CONFIG += c++17 release
-TARGET = omacut
+TARGET = omavid
 TEMPLATE = app
 
 HEADERS += \

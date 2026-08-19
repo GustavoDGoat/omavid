@@ -349,7 +349,7 @@ bool BackendTests::installBrokenFfmpeg(const QString &dirPath) {
     QFile fake(QDir(dirPath).filePath(QStringLiteral("ffmpeg")));
     if (!fake.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return false;
-    fake.write("#!/definitely/missing/omacut-ffmpeg\n");
+    fake.write("#!/definitely/missing/omavid-ffmpeg\n");
     fake.close();
     return fake.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner
                                | QFileDevice::ExeOwner);
@@ -655,8 +655,8 @@ void BackendTests::exportMergeConcatenatesClips() {
              qPrintable(QStringLiteral("merged duration %1").arg(info.duration)));
     QVERIFY2(formatName(outPath).contains(QStringLiteral("mp4")),
              qPrintable(formatName(outPath)));
-    QVERIFY(!QFileInfo::exists(outPath + QStringLiteral(".omacut-part.mp4")));
-    QVERIFY(!QFileInfo::exists(outPath + QStringLiteral(".omacut-merge")));
+    QVERIFY(!QFileInfo::exists(outPath + QStringLiteral(".omavid-part.mp4")));
+    QVERIFY(!QFileInfo::exists(outPath + QStringLiteral(".omavid-merge")));
 }
 
 void BackendTests::exportClipWritesMp4() {
@@ -721,7 +721,7 @@ void BackendTests::exportClipCanReplaceSourceFile() {
     QVERIFY(ffmpeg::probe(sourcePath).ok);
     QVERIFY2(formatName(sourcePath).contains(QStringLiteral("mp4")),
              qPrintable(formatName(sourcePath)));
-    QVERIFY(!QFileInfo::exists(sourcePath + QStringLiteral(".omacut-part.mp4")));
+    QVERIFY(!QFileInfo::exists(sourcePath + QStringLiteral(".omavid-part.mp4")));
 }
 
 void BackendTests::exportZeroLengthClipFails() {
@@ -836,7 +836,7 @@ void BackendTests::failedExportPreservesExistingFile() {
     QFile check(outPath);
     QVERIFY(check.open(QIODevice::ReadOnly));
     QCOMPARE(check.readAll(), original);
-    QVERIFY(!QFileInfo::exists(outPath + QStringLiteral(".omacut-part.mp4")));
+    QVERIFY(!QFileInfo::exists(outPath + QStringLiteral(".omavid-part.mp4")));
 }
 
 void BackendTests::qmlDoesNotCreateAudioOutputWithoutVideo() {

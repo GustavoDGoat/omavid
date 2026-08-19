@@ -12,7 +12,7 @@ ApplicationWindow {
     minimumWidth: 860
     minimumHeight: 460
     visible: true
-    title: backend.source.toString() === "" ? "omacut" : "omacut — " + fileName(backend.source)
+    title: backend.source.toString() === "" ? "omavid" : "omavid — " + fileName(backend.source)
     readonly property bool hasVideo: backend.source.toString() !== ""
     readonly property color accent: backend.themeAccent
     readonly property color accentForeground: backend.themeAccentForeground

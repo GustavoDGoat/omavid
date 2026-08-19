@@ -1,4 +1,4 @@
-// omacut — a dead-simple video length trimmer. Qt Quick (QML) UI, ffmpeg cuts.
+// omavid — a dead-simple video trimmer and merger. Qt Quick (QML) UI, ffmpeg cuts.
 
 #include <QGuiApplication>
 #include <QIcon>
@@ -12,12 +12,12 @@
 
 int main(int argc, char *argv[]) {
     QGuiApplication app(argc, argv);
-    app.setApplicationName("omacut");
+    app.setApplicationName("omavid");
 
-    // Associates the window with omacut.desktop so the compositor (Wayland app_id
+    // Associates the window with omavid.desktop so the compositor (Wayland app_id
     // = this name) and taskbars pick up our installed icon.
-    app.setDesktopFileName("omacut");
-    app.setWindowIcon(QIcon::fromTheme("omacut"));
+    app.setDesktopFileName("omavid");
+    app.setWindowIcon(QIcon::fromTheme("omavid"));
 
     // Modern, themeable controls (the same family Quickshell builds on).
     QQuickStyle::setStyle("Material");

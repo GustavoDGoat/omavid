@@ -63,7 +63,7 @@ public:
     double clipEndSec() const;
 
     // The accent from an omarchy colors.toml, or the fallback when the file is
-    // missing or holds no usable accent — which is what keeps omacut working on
+    // missing or holds no usable accent — which is what keeps omavid working on
     // distros without omarchy themes.
     static QString accentFromColorsFile(const QString &path, const QString &fallback);
     // "black" or "white", whichever stays legible on the given color.

@@ -1,12 +1,12 @@
 [Desktop Entry]
 Type=Application
-Name=Omacut
+Name=Omavid
 GenericName=Video Trimmer
-Comment=Dead-simple video length trimmer
-Exec=omacut %f
-Icon=omacut
+Comment=Dead-simple video trimmer and merger
+Exec=omavid %f
+Icon=omavid
 Terminal=false
 Categories=AudioVideo;Video;AudioVideoEditing;
 MimeType=video/mp4;video/x-matroska;video/quicktime;video/webm;video/x-msvideo;video/mpeg;
-Keywords=video;trim;cut;clip;ffmpeg;
-StartupWMClass=omacut
+Keywords=video;trim;cut;clip;merge;ffmpeg;
+StartupWMClass=omavid
