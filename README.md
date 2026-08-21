@@ -10,6 +10,7 @@ Built with a **Qt Quick (QML)** interface on the Material style — the same Qt 
 
 - **Length trimming** — scrub a filmstrip of thumbnails, drag the start/end handles, and preview the clip before you commit to it.
 - **Merging** — add several videos to a playlist, trim each one independently, reorder or remove clips, then merge them in playlist order.
+- **Audio** — attach an audio file to any clip to replace its sound, or lay multiple audio files on a draggable track across the merged video.
 - **Frame-accurate cuts** — trims are re-encoded with `libx264`/`aac` so every cut lands exactly where you set it (no keyframe snapping).
 - **Smart export** — always MP4, always preserving aspect ratio, and never upscaling. Pick Original/1080p/720p only when the source actually benefits.
 - **Fast sharing** — exports are written with `+faststart` so the moov atom is up front and shared clips start playing before they finish downloading.
@@ -31,6 +32,16 @@ Built with a **Qt Quick (QML)** interface on the Material style — the same Qt 
 2. In the playlist on the left, click a clip to edit it, use the ↑/↓ arrows to reorder, and × to remove one.
 3. Each clip keeps its own trim (or its full length if you don't touch it).
 4. Click **Merge** (or `Ctrl+M`) to re-encode every clip and concatenate them in order.
+
+### Audio
+
+Two ways to bring your own sound:
+
+**Clip audio (replace a clip's sound).** Hit the ♪ button on any clip in the playlist and pick an audio file. The clip's original audio is muted and the imported file plays instead — drag the handles in the "Clip audio" bar under the timeline to cut it. The ♪ button removes the audio and restores the original sound.
+
+**Audio track (sound for the merged video).** Use **Add audio** in the "Audio track" section to import as many audio files as you like. Each one appears as a block on a track that spans the whole merged video: drag a block to move it anywhere on the timeline, drag its edges to trim it, and × to remove it. **Mute video audio** silences the clips' own sound so only your imported audio plays. Everything is mixed on export — sources with different sample rates or channel counts are normalized automatically, and videos without any audio still mix cleanly.
+
+Replacement audio is applied on export; preview playback always plays the clip's own sound.
 
 ## Hotkeys
 

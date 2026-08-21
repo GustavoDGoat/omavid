@@ -52,15 +52,20 @@ QString concatFileLine(const QString &path) {
 }
 }
 
-// State for a merge run: the per-clip encode jobs, then one concat pass.
+// State for a merge run: the per-clip encode jobs, one concat pass, then an
+// optional audio-track mix before the final rename.
 struct Backend::MergeContext {
     QString ffmpegBin;
     QString outPath;
     QString tmpDir;
     QString listPath;
     QString tmpPath;
+    QString mixPath;
     QStringList dstPaths;
     QList<QStringList> argLists;
+    QList<ffmpeg::AudioSpec> audioClips;
+    bool muteVideoAudio = false;
+    double totalDuration = 0.0;
     int next = 0;
     std::shared_ptr<bool> completed = std::make_shared<bool>(false);
 };
@@ -70,7 +75,8 @@ Backend::Backend(ThumbProvider *provider, QObject *parent)
 
 Backend::Backend(ThumbProvider *provider, FilePicker *filePicker, QObject *parent)
     : QObject(parent), m_provider(provider), m_filePicker(filePicker),
-      m_clips(new ClipListModel(this)), m_themeAccent(kDefaultAccent) {
+      m_clips(new ClipListModel(this)), m_audioTrack(new AudioTrackModel(this)),
+      m_themeAccent(kDefaultAccent) {
     if (!m_filePicker->parent())
         m_filePicker->setParent(this);
     wireFilePicker();
@@ -97,6 +103,7 @@ void Backend::wireFilePicker() {
     connect(m_filePicker, &FilePicker::openSelected, this, &Backend::addClips);
     connect(m_filePicker, &FilePicker::exportSelected, this, &Backend::exportClip);
     connect(m_filePicker, &FilePicker::exportMergedSelected, this, &Backend::exportMerge);
+    connect(m_filePicker, &FilePicker::audioSelected, this, &Backend::handleAudioSelected);
     connect(m_filePicker, &FilePicker::failed, this, &Backend::loadError);
 }
 
@@ -208,6 +215,51 @@ double Backend::clipStartSec() const {
 double Backend::clipEndSec() const {
     const Clip *clip = currentClip();
     return clip ? clip->endSec : 0.0;
+}
+
+bool Backend::clipHasAudio() const {
+    const Clip *clip = currentClip();
+    return clip && clip->hasAudio();
+}
+
+double Backend::clipAudioStart() const {
+    const Clip *clip = currentClip();
+    return clip ? clip->audioStartSec : 0.0;
+}
+
+double Backend::clipAudioEnd() const {
+    const Clip *clip = currentClip();
+    return clip ? clip->audioEndSec : 0.0;
+}
+
+double Backend::clipAudioDuration() const {
+    const Clip *clip = currentClip();
+    return clip ? clip->audioDuration : 0.0;
+}
+
+QString Backend::clipAudioName() const {
+    const Clip *clip = currentClip();
+    return clip ? clip->audioName : QString();
+}
+
+double Backend::mergeDuration() const {
+    double total = 0.0;
+    for (int i = 0; i < m_clips->count(); ++i) {
+        const Clip &clip = m_clips->at(i);
+        if (clip.ok && clip.endSec > clip.startSec)
+            total += clip.endSec - clip.startSec;
+    }
+    return total;
+}
+
+bool Backend::anyAudioWork() const {
+    if (m_muteVideoAudio || m_audioTrack->count() > 0)
+        return true;
+    for (int i = 0; i < m_clips->count(); ++i) {
+        if (m_clips->at(i).hasAudio())
+            return true;
+    }
+    return false;
 }
 
 bool Backend::anyClipTrimmed() const {
@@ -339,6 +391,105 @@ void Backend::setClipTrim(int index, double start, double end) {
     end = qBound(start, end, clip.duration);
     if (m_clips->setTrim(index, start, end))
         bumpClipRevision();
+}
+
+void Backend::attachAudioDialog(int clipIndex) {
+    if (clipIndex < 0 || clipIndex >= m_clips->count())
+        return;
+    m_pendingAudioClipIndex = clipIndex;
+    m_filePicker->openAudio();
+}
+
+void Backend::detachAudio(int clipIndex) {
+    if (m_clips->clearAudio(clipIndex))
+        bumpClipRevision();
+}
+
+void Backend::setClipAudioTrim(int clipIndex, double start, double end) {
+    if (clipIndex < 0 || clipIndex >= m_clips->count())
+        return;
+    const Clip &clip = m_clips->at(clipIndex);
+    if (!clip.hasAudio())
+        return;
+    start = qBound(0.0, start, clip.audioDuration);
+    end = qBound(start, end, clip.audioDuration);
+    m_clips->setAudio(clipIndex, clip.audioPath, clip.audioName, clip.audioDuration, start, end);
+    bumpClipRevision();
+}
+
+void Backend::addAudioDialog() {
+    m_pendingAudioClipIndex = -1;
+    m_filePicker->openAudio();
+}
+
+void Backend::removeAudio(int index) {
+    if (index < 0 || index >= m_audioTrack->count())
+        return;
+    m_audioTrack->removeAt(index);
+    bumpClipRevision();
+}
+
+void Backend::setAudioTrim(int index, double start, double end) {
+    if (index < 0 || index >= m_audioTrack->count())
+        return;
+    const AudioClip &clip = m_audioTrack->at(index);
+    start = qBound(0.0, start, clip.duration);
+    end = qBound(start, end, clip.duration);
+    if (m_audioTrack->setTrim(index, start, end))
+        bumpClipRevision();
+}
+
+void Backend::setAudioPosition(int index, double position) {
+    if (index < 0 || index >= m_audioTrack->count())
+        return;
+    const double maxPos = qMax(0.0, mergeDuration() - (m_audioTrack->at(index).endSec
+                                                      - m_audioTrack->at(index).startSec));
+    position = qBound(0.0, position, maxPos);
+    if (m_audioTrack->setPosition(index, position))
+        bumpClipRevision();
+}
+
+void Backend::setMuteVideoAudio(bool mute) {
+    if (m_muteVideoAudio == mute)
+        return;
+    m_muteVideoAudio = mute;
+    bumpClipRevision();
+}
+
+ffmpeg::AudioSpec Backend::audioSpecFor(const Clip &clip) const {
+    ffmpeg::AudioSpec spec;
+    if (!clip.hasAudio())
+        return spec;
+    spec.path = clip.audioPath;
+    spec.startSec = clip.audioStartSec;
+    spec.endSec = clip.audioEndSec;
+    return spec;
+}
+
+void Backend::handleAudioSelected(const QUrl &url) {
+    const QString path = url.toLocalFile();
+    const ffmpeg::VideoInfo info = ffmpeg::audioProbe(path);
+    if (!info.ok) {
+        emit loadError(info.error);
+        return;
+    }
+
+    if (m_pendingAudioClipIndex >= 0 && m_pendingAudioClipIndex < m_clips->count()) {
+        m_clips->setAudio(m_pendingAudioClipIndex, path, QFileInfo(path).fileName(),
+                          info.duration, 0.0, info.duration);
+        bumpClipRevision();
+    } else {
+        AudioClip clip;
+        clip.path = path;
+        clip.name = QFileInfo(path).fileName();
+        clip.duration = info.duration;
+        clip.startSec = 0.0;
+        clip.endSec = info.duration;
+        clip.positionSec = 0.0;
+        m_audioTrack->append(clip);
+        bumpClipRevision();
+    }
+    m_pendingAudioClipIndex = -1;
 }
 
 void Backend::openVideoDialog() {
@@ -552,7 +703,8 @@ void Backend::exportClip(const QUrl &dst, double start, double end, int scaleHei
     // success, so failed/cancelled exports preserve any existing file.
     const QString tmpPath = outPath + QStringLiteral(".omavid-part.mp4");
     QFile::remove(tmpPath);
-    const QStringList args = ffmpeg::trimArgs(clip->path, tmpPath, start, end, scaleHeight);
+    const QStringList args = ffmpeg::trimArgs(clip->path, tmpPath, start, end, scaleHeight,
+                                              audioSpecFor(*clip));
     const QString ffmpegBin = ffmpeg::toolPath("ffmpeg");
 
     auto *proc = new QProcess(this);
@@ -635,14 +787,27 @@ void Backend::exportMerge(const QUrl &dst, int scaleHeight) {
     ctx->tmpDir = outPath + QStringLiteral(".omavid-merge");
     ctx->listPath = ctx->tmpDir + QStringLiteral("/list.txt");
     ctx->tmpPath = outPath + QStringLiteral(".omavid-part.mp4");
+    ctx->mixPath = outPath + QStringLiteral(".omavid-mix.mp4");
+    ctx->muteVideoAudio = m_muteVideoAudio;
+    ctx->totalDuration = mergeDuration();
     QDir().mkpath(ctx->tmpDir);
+
+    for (int i = 0; i < m_audioTrack->count(); ++i) {
+        const AudioClip &audio = m_audioTrack->at(i);
+        ffmpeg::AudioSpec spec;
+        spec.path = audio.path;
+        spec.startSec = audio.startSec;
+        spec.endSec = audio.endSec;
+        spec.positionSec = audio.positionSec;
+        ctx->audioClips << spec;
+    }
 
     for (int i = 0; i < m_clips->count(); ++i) {
         const Clip &clip = m_clips->at(i);
         const QString dstPath = ctx->tmpDir + QStringLiteral("/clip_%1.mp4").arg(i);
         ctx->dstPaths << dstPath;
         ctx->argLists << ffmpeg::mergeClipArgs(clip.path, dstPath, clip.startSec, clip.endSec,
-                                               scaleHeight);
+                                               scaleHeight, audioSpecFor(clip));
     }
 
     runNextMergeClip(ctx);
@@ -720,16 +885,11 @@ void Backend::runMergeConcat(const std::shared_ptr<MergeContext> &ctx) {
                                       ? QStringLiteral("ffmpeg failed while merging.") : err);
                     return;
                 }
-                if (!replaceWithTemp(ctx->tmpPath, ctx->outPath)) {
-                    *ctx->completed = true;
-                    failMerge(ctx, QStringLiteral("Could not write the merged file."));
-                    return;
+                if (ctx->audioClips.isEmpty()) {
+                    finishMerge(ctx);
+                } else {
+                    runMergeMix(ctx);
                 }
-                *ctx->completed = true;
-                cleanupMergeTemp(ctx);
-                setBusy(false);
-                setStatus(QString());
-                emit mergeDone(ctx->outPath);
             });
     connect(proc, &QProcess::errorOccurred, this,
             [this, ctx, proc](QProcess::ProcessError error) {
@@ -743,6 +903,59 @@ void Backend::runMergeConcat(const std::shared_ptr<MergeContext> &ctx) {
     proc->start(ctx->ffmpegBin, concat);
 }
 
+void Backend::runMergeMix(const std::shared_ptr<MergeContext> &ctx) {
+    setStatus(QStringLiteral("Mixing audio..."));
+    // Sources without an audio stream must still mix, so find out what the
+    // concat produced before building the filter graph.
+    const QStringList args = ffmpeg::mixArgs(ctx->tmpPath, ctx->mixPath, ctx->audioClips,
+                                             ctx->totalDuration, ctx->muteVideoAudio,
+                                             ffmpeg::hasAudioStream(ctx->tmpPath));
+
+    auto *proc = new QProcess(this);
+    connect(proc, &QProcess::finished, this,
+            [this, ctx, proc](int code, QProcess::ExitStatus exitStatus) {
+                if (*ctx->completed) {
+                    proc->deleteLater();
+                    return;
+                }
+                const QString err = QString::fromUtf8(proc->readAllStandardError()).trimmed();
+                proc->deleteLater();
+                if (exitStatus != QProcess::NormalExit || code != 0) {
+                    *ctx->completed = true;
+                    failMerge(ctx, err.isEmpty()
+                                      ? QStringLiteral("ffmpeg failed while mixing audio.") : err);
+                    return;
+                }
+                // The concat output is superseded by the mixed file.
+                QFile::remove(ctx->tmpPath);
+                ctx->tmpPath = ctx->mixPath;
+                finishMerge(ctx);
+            });
+    connect(proc, &QProcess::errorOccurred, this,
+            [this, ctx, proc](QProcess::ProcessError error) {
+                if (error != QProcess::FailedToStart || *ctx->completed)
+                    return;
+                *ctx->completed = true;
+                const QString err = proc->errorString();
+                proc->deleteLater();
+                failMerge(ctx, err.isEmpty() ? QStringLiteral("Could not start ffmpeg.") : err);
+            });
+    proc->start(ctx->ffmpegBin, args);
+}
+
+void Backend::finishMerge(const std::shared_ptr<MergeContext> &ctx) {
+    if (!replaceWithTemp(ctx->tmpPath, ctx->outPath)) {
+        *ctx->completed = true;
+        failMerge(ctx, QStringLiteral("Could not write the merged file."));
+        return;
+    }
+    *ctx->completed = true;
+    cleanupMergeTemp(ctx);
+    setBusy(false);
+    setStatus(QString());
+    emit mergeDone(ctx->outPath);
+}
+
 void Backend::failMerge(const std::shared_ptr<MergeContext> &ctx, const QString &message) {
     cleanupMergeTemp(ctx);
     setBusy(false);
@@ -752,5 +965,6 @@ void Backend::failMerge(const std::shared_ptr<MergeContext> &ctx, const QString 
 
 void Backend::cleanupMergeTemp(const std::shared_ptr<MergeContext> &ctx) {
     QFile::remove(ctx->tmpPath);
+    QFile::remove(ctx->mixPath);
     QDir(ctx->tmpDir).removeRecursively();
 }

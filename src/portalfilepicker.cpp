@@ -147,6 +147,29 @@ PortalFileFilters mp4Filters() {
     return {mp4Filter()};
 }
 
+PortalFileFilter audioFilter() {
+    return {
+        QStringLiteral("Audio files"),
+        {
+            {1, QStringLiteral("audio/*")},
+            {0, QStringLiteral("*.aac")},
+            {0, QStringLiteral("*.flac")},
+            {0, QStringLiteral("*.m4a")},
+            {0, QStringLiteral("*.mp3")},
+            {0, QStringLiteral("*.ogg")},
+            {0, QStringLiteral("*.opus")},
+            {0, QStringLiteral("*.wav")},
+        },
+    };
+}
+
+PortalFileFilters audioFilters() {
+    return {
+        audioFilter(),
+        {QStringLiteral("All files"), {{0, QStringLiteral("*")}}},
+    };
+}
+
 QString portalToken() {
     return QStringLiteral("omavid_%1").arg(QRandomGenerator::global()->generate());
 }
@@ -177,6 +200,18 @@ void PortalFilePicker::openVideo() {
     options.insert(QStringLiteral("current_filter"), QVariant::fromValue(videoFilter()));
 
     requestFile(QStringLiteral("OpenFile"), QStringLiteral("Open Video Files"), options, Action::Open);
+}
+
+void PortalFilePicker::openAudio() {
+    QVariantMap options;
+    options.insert(QStringLiteral("accept_label"), QStringLiteral("Open"));
+    options.insert(QStringLiteral("modal"), true);
+    options.insert(QStringLiteral("multiple"), false);
+    options.insert(QStringLiteral("current_folder"), portalPathBytes(openFolder()));
+    options.insert(QStringLiteral("filters"), QVariant::fromValue(audioFilters()));
+    options.insert(QStringLiteral("current_filter"), QVariant::fromValue(audioFilter()));
+
+    requestFile(QStringLiteral("OpenFile"), QStringLiteral("Open Audio File"), options, Action::OpenAudio);
 }
 
 // Adds the "Quality" combo to a save dialog when there's a real downscale to
@@ -325,6 +360,10 @@ void PortalFilePicker::handleResponse(uint response, const QVariantMap &results)
         for (const QString &uri : uris)
             urls.append(QUrl(uri));
         emit openSelected(urls);
+        return;
+    }
+    if (action == Action::OpenAudio) {
+        emit audioSelected(QUrl(uris.first()));
         return;
     }
     if (action != Action::Export && action != Action::ExportMerged)

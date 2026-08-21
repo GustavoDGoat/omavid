@@ -14,13 +14,9 @@ namespace {
 constexpr int kProbeTimeoutMs = 15000;
 // Poll granularity while waiting on a thumbnail child, so cancellation is prompt.
 constexpr int kThumbPollMs = 50;
-}
 
-QString toolPath(const QString &tool) {
-    return QStandardPaths::findExecutable(tool);
-}
-
-VideoInfo probe(const QString &path) {
+// Shared probe body: fetch the first stream matching `selector` plus duration.
+VideoInfo probeStream(const QString &path, const QString &selector, const QString &missingMessage) {
     VideoInfo info;
     info.path = path;
 
@@ -36,7 +32,7 @@ VideoInfo probe(const QString &path) {
         "-print_format", "json",
         "-show_format",
         "-show_streams",
-        "-select_streams", "v:0",
+        "-select_streams", selector,
         path,
     });
     if (!proc.waitForFinished(kProbeTimeoutMs)) {
@@ -57,12 +53,11 @@ VideoInfo probe(const QString &path) {
     const QJsonObject root = doc.object();
     const QJsonArray streams = root.value("streams").toArray();
     if (streams.isEmpty()) {
-        info.error = "No video stream found in this file.";
+        info.error = missingMessage;
         return info;
     }
 
     const QJsonObject stream = streams.first().toObject();
-
     info.width = stream.value("width").toInt();
     info.height = stream.value("height").toInt();
 
@@ -71,16 +66,34 @@ VideoInfo probe(const QString &path) {
     if (durationStr.isEmpty())
         durationStr = root.value("format").toObject().value("duration").toString();
     if (durationStr.isEmpty()) {
-        info.error = "Could not determine the video duration.";
+        info.error = "Could not determine the duration.";
         return info;
     }
 
     info.duration = durationStr.toDouble();
-
     info.ok = info.duration > 0.0;
     if (!info.ok)
-        info.error = "Video has a zero or invalid duration.";
+        info.error = "The file has a zero or invalid duration.";
     return info;
+}
+}
+
+QString toolPath(const QString &tool) {
+    return QStandardPaths::findExecutable(tool);
+}
+
+VideoInfo probe(const QString &path) {
+    return probeStream(path, QStringLiteral("v:0"),
+                       QStringLiteral("No video stream found in this file."));
+}
+
+VideoInfo audioProbe(const QString &path) {
+    return probeStream(path, QStringLiteral("a:0"),
+                       QStringLiteral("No audio stream found in this file."));
+}
+
+bool hasAudioStream(const QString &path) {
+    return probeStream(path, QStringLiteral("a:0"), QString()).ok;
 }
 
 QImage thumbnail(const QString &path, double time, int height,
@@ -124,7 +137,7 @@ QImage thumbnail(const QString &path, double time, int height,
 }
 
 QStringList trimArgs(const QString &src, const QString &dst, double start, double end,
-                     int scaleHeight) {
+                     int scaleHeight, const AudioSpec &audio) {
     // Machine-readable progress on stdout (errors stay on stderr), so the UI
     // can show how far along the encode is.
     QStringList args = {"-y", "-loglevel", "error", "-progress", "pipe:1"};
@@ -132,24 +145,33 @@ QStringList trimArgs(const QString &src, const QString &dst, double start, doubl
     // the moov atom up front so shared clips start playing before they finish
     // downloading.
     args << "-ss" << QString::number(start, 'f', 3)
-         << "-i" << src
-         << "-t" << QString::number(qMax(end - start, 0.0), 'f', 3);
+         << "-i" << src;
+    if (audio.valid())
+        args << "-ss" << QString::number(audio.startSec, 'f', 3)
+             << "-i" << audio.path;
+    args << "-t" << QString::number(qMax(end - start, 0.0), 'f', 3);
     // Cap the shorter side, judged on the decoded (rotation-applied) frame, so
     // portrait and landscape both keep their aspect ratio. -2 keeps the other
     // side divisible by two, which libx264 requires.
     if (scaleHeight > 0)
         args << "-vf"
              << QString("scale='if(gt(iw,ih),-2,%1)':'if(gt(iw,ih),%1,-2)'").arg(scaleHeight);
+    if (audio.valid())
+        args << "-map" << "0:v:0" << "-map" << "1:a:0";
     args << "-c:v" << "libx264" << "-preset" << "veryfast"
-         << "-crf" << "18" << "-c:a" << "aac"
-         << "-movflags" << "+faststart"
+         << "-crf" << "18" << "-c:a" << "aac";
+    // Replacement audio shorter than the clip would otherwise truncate the video;
+    // pad it with silence to the clip length instead.
+    if (audio.valid())
+        args << "-af" << "apad";
+    args << "-movflags" << "+faststart"
          << dst;
     return args;
 }
 
 QStringList mergeClipArgs(const QString &src, const QString &dst, double start, double end,
-                          int scaleHeight) {
-    QStringList args = trimArgs(src, dst, start, end, scaleHeight);
+                          int scaleHeight, const AudioSpec &audio) {
+    QStringList args = trimArgs(src, dst, start, end, scaleHeight, audio);
     // Normalize for concat compatibility: a mix of source sample rates, channel
     // counts or pixel formats would make a stream-copy concat produce broken
     // audio or reject outright. Output options must precede the trailing dst.
@@ -175,6 +197,51 @@ QStringList concatArgs(const QString &listPath, const QString &dst) {
         QStringLiteral("-movflags"), QStringLiteral("+faststart"),
         dst,
     };
+}
+
+QStringList mixArgs(const QString &mergedSrc, const QString &dst,
+                    const QList<AudioSpec> &clips, double totalDuration,
+                    bool muteVideoAudio, bool mergedHasAudio) {
+    QStringList args = {"-y", "-loglevel", "error", "-i", mergedSrc};
+    for (const AudioSpec &clip : clips)
+        args << "-i" << clip.path;
+
+    // Every input is resampled to 48 kHz stereo so amix never rejects a clip for
+    // a mismatched rate/layout; atrim/asetpts crop and reset timestamps, and
+    // adelay positions the clip in milliseconds. The base is the merged video's
+    // own audio when it has one (silenced when muted), otherwise a synthesized
+    // silent track — sources without audio must still mix cleanly. amix keeps
+    // the base length.
+    QString fc;
+    if (mergedHasAudio && !muteVideoAudio)
+        fc = QStringLiteral("[0:a]aformat=sample_rates=48000:channel_layouts=stereo[v0];");
+    else
+        fc = QStringLiteral("anullsrc=r=48000:cl=stereo:d=%1[v0];").arg(totalDuration, 0, 'f', 3);
+
+    for (int i = 0; i < clips.size(); ++i) {
+        const AudioSpec &clip = clips.at(i);
+        fc += QStringLiteral("[%1:a]atrim=start=%2:end=%3,asetpts=PTS-STARTPTS,"
+                             "aformat=sample_rates=48000:channel_layouts=stereo,"
+                             "adelay=%4|%4[a%5];")
+                  .arg(i + 1)
+                  .arg(clip.startSec, 0, 'f', 3)
+                  .arg(clip.endSec, 0, 'f', 3)
+                  .arg(qRound(clip.positionSec * 1000.0))
+                  .arg(i + 1);
+    }
+
+    fc += QStringLiteral("[v0]");
+    for (int i = 0; i < clips.size(); ++i)
+        fc += QStringLiteral("[a%1]").arg(i + 1);
+    fc += QStringLiteral("amix=inputs=%1:duration=first:normalize=0[aout]").arg(clips.size() + 1);
+
+    args << "-filter_complex" << fc;
+    args << "-map" << "0:v" << "-map" << "[aout]";
+    args << "-c:v" << "copy" << "-c:a" << "aac"
+         << "-movflags" << "+faststart"
+         << "-t" << QString::number(totalDuration, 'f', 3)
+         << dst;
+    return args;
 }
 
 }  // namespace ffmpeg

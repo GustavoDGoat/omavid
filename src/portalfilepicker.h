@@ -11,6 +11,7 @@ public:
     explicit PortalFilePicker(QObject *parent = nullptr);
 
     void openVideo() override;
+    void openAudio() override;
     void exportVideo(const QUrl &suggestedUrl, double start, double end,
                      const QList<int> &scaleHeights) override;
     void exportMerged(const QUrl &suggestedUrl,
@@ -23,6 +24,7 @@ private:
     enum class Action {
         None,
         Open,
+        OpenAudio,
         Export,
         ExportMerged
     };

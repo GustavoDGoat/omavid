@@ -27,12 +27,14 @@ ApplicationWindow {
     // bumps backend.clipRevision, and exporting records the revision it saved.
     // Plain value (not a binding) so it snapshots the revision at export time.
     property int lastExportedClipRevision: 0
-    readonly property bool trimDirty: hasVideo && backend.anyClipTrimmed
+    readonly property bool trimDirty: hasVideo
+        && (backend.anyClipTrimmed || backend.anyAudioWork)
         && backend.clipRevision !== lastExportedClipRevision
 
     // Guards the write-back of the TrimBar to the model, so switching clips
     // (which reloads the trim bar) doesn't echo the values back as edits.
     property bool syncingTrim: false
+    property bool syncingAudio: false
 
     Material.theme: Material.Dark
     Material.accent: win.accent
@@ -52,6 +54,16 @@ ApplicationWindow {
     function pushTrim() {
         if (!win.syncingTrim)
             backend.setClipTrim(backend.currentIndex, trimBar.startSec, trimBar.endSec);
+    }
+    function pushClipAudioTrim() {
+        if (!win.syncingAudio)
+            backend.setClipAudioTrim(backend.currentIndex, clipAudioBar.startSec, clipAudioBar.endSec);
+    }
+    function syncClipAudioBar() {
+        win.syncingAudio = true;
+        clipAudioBar.startSec = backend.clipAudioStart;
+        clipAudioBar.endSec = backend.clipAudioEnd;
+        win.syncingAudio = false;
     }
     function exportVideo() {
         if (!win.hasVideo || backend.duration <= 0 || backend.busy)
@@ -477,23 +489,27 @@ ApplicationWindow {
         }
     }
 
-    // A tiny icon-less button for per-clip reorder/remove actions.
+    // A tiny icon-less button for per-clip reorder/remove/audio actions.
     component RowButton: Rectangle {
         id: rowButton
         width: 22
         height: 22
         radius: 5
         property string glyph: ""
+        property string tip: ""
+        property color glyphColor: "#c0c0c4"
         signal clicked()
 
         color: rowHover.hovered && enabled ? "#3a3a3e" : "transparent"
         opacity: enabled ? 1 : 0.3
 
         HoverHandler { id: rowHover; enabled: rowButton.enabled }
+        ToolTip.visible: rowHover.hovered && tip !== ""
+        ToolTip.text: tip
         Text {
             anchors.centerIn: parent
             text: rowButton.glyph
-            color: "#c0c0c4"
+            color: rowButton.glyphColor
             font.pixelSize: 14
         }
         MouseArea {
@@ -578,22 +594,39 @@ ApplicationWindow {
                                     font.pixelSize: 10
                                     font.family: "monospace"
                                 }
+                                Label {
+                                    Layout.fillWidth: true
+                                    visible: model.hasAudio
+                                    text: "♪ " + model.audioName
+                                    color: win.accent
+                                    elide: Text.ElideRight
+                                    font.pixelSize: 10
+                                }
                             }
 
                             Row {
                                 spacing: 2
                                 RowButton {
                                     glyph: "↑"
+                                    tip: "Move up"
                                     enabled: index > 0
                                     onClicked: backend.moveClip(index, index - 1)
                                 }
                                 RowButton {
                                     glyph: "↓"
+                                    tip: "Move down"
                                     enabled: index < backend.clipCount - 1
                                     onClicked: backend.moveClip(index, index + 1)
                                 }
                                 RowButton {
+                                    glyph: "♪"
+                                    tip: model.hasAudio ? "Remove audio" : "Attach audio"
+                                    glyphColor: model.hasAudio ? win.accent : "#c0c0c4"
+                                    onClicked: model.hasAudio ? backend.detachAudio(index) : backend.attachAudioDialog(index)
+                                }
+                                RowButton {
                                     glyph: "×"
+                                    tip: "Remove clip"
                                     onClicked: backend.removeClip(index)
                                 }
                             }
@@ -714,6 +747,77 @@ ApplicationWindow {
                         tipText: "Export"
                         enabled: backend.duration > 0 && !backend.busy
                         onClicked: exportVideo()
+                    }
+                }
+
+                // --- audio ---
+                ColumnLayout {
+                    visible: win.hasVideo
+                    Layout.fillWidth: true
+                    spacing: 10
+
+                    // per-clip replacement audio editor
+                    ColumnLayout {
+                        visible: backend.clipHasAudio
+                        Layout.fillWidth: true
+                        spacing: 4
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Clip audio: " + backend.clipAudioName
+                                color: win.accent
+                                elide: Text.ElideMiddle
+                                font.pixelSize: 12
+                            }
+                            RowButton {
+                                glyph: "×"
+                                tip: "Remove audio"
+                                onClicked: backend.detachAudio(backend.currentIndex)
+                            }
+                        }
+
+                        AudioBar {
+                            id: clipAudioBar
+                            Layout.fillWidth: true
+                            durationSec: backend.clipAudioDuration
+                            accent: win.accent
+                        }
+                    }
+
+                    // merge audio track
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 4
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label {
+                                text: "Audio track"
+                                color: "#d6d6da"
+                                font.pixelSize: 12
+                                font.weight: Font.DemiBold
+                            }
+                            Item { Layout.fillWidth: true }
+                            CheckBox {
+                                text: "Mute video audio"
+                                checked: backend.muteVideoAudio
+                                onCheckedChanged: backend.setMuteVideoAudio(checked)
+                            }
+                            Button {
+                                text: "Add audio"
+                                enabled: !backend.busy
+                                onClicked: backend.addAudioDialog()
+                            }
+                        }
+
+                        AudioTrack {
+                            Layout.fillWidth: true
+                            model: backend.audioTrack
+                            totalDuration: backend.mergeDuration
+                            accent: win.accent
+                        }
                     }
                 }
 
@@ -936,6 +1040,12 @@ ApplicationWindow {
     }
 
     Connections {
+        target: clipAudioBar
+        function onStartSecChanged() { win.pushClipAudioTrim(); }
+        function onEndSecChanged() { win.pushClipAudioTrim(); }
+    }
+
+    Connections {
         target: backend
         function onInfoChanged() {
             win.noticeText = "";
@@ -951,7 +1061,9 @@ ApplicationWindow {
             trimBar.endSec = backend.clipEndSec;
             trimBar.playheadSec = 0;
             win.syncingTrim = false;
+            win.syncClipAudioBar();
         }
+        function onClipsChanged() { win.syncClipAudioBar(); }
         function onExportDone(path) {
             win.showNotice("Saved " + path);
             if (backend.clipCount === 1)

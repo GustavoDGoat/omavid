@@ -26,6 +26,7 @@ public:
     int openCount = 0;
     int exportCount = 0;
     int mergeExportCount = 0;
+    int audioOpenCount = 0;
     QUrl lastSuggestedUrl;
     QUrl lastMergeSuggestedUrl;
     double lastStart = 0;
@@ -34,6 +35,7 @@ public:
     QList<int> lastMergeScaleHeights;
 
     void openVideo() override { ++openCount; }
+    void openAudio() override { ++audioOpenCount; }
 
     void exportVideo(const QUrl &suggestedUrl, double start, double end,
                      const QList<int> &scaleHeights) override {
@@ -88,6 +90,16 @@ class ShortcutBackend : public QObject {
     Q_PROPERTY(int currentIndex READ currentIndex NOTIFY currentIndexChanged)
     Q_PROPERTY(double clipStartSec READ clipStartSec NOTIFY currentIndexChanged)
     Q_PROPERTY(double clipEndSec READ clipEndSec NOTIFY currentIndexChanged)
+    Q_PROPERTY(bool clipHasAudio READ clipHasAudio NOTIFY currentIndexChanged)
+    Q_PROPERTY(double clipAudioStart READ clipAudioStart NOTIFY currentIndexChanged)
+    Q_PROPERTY(double clipAudioEnd READ clipAudioEnd NOTIFY currentIndexChanged)
+    Q_PROPERTY(double clipAudioDuration READ clipAudioDuration NOTIFY currentIndexChanged)
+    Q_PROPERTY(QString clipAudioName READ clipAudioName NOTIFY currentIndexChanged)
+    Q_PROPERTY(AudioTrackModel *audioTrack READ audioTrack CONSTANT)
+    Q_PROPERTY(int audioTrackCount READ audioTrackCount NOTIFY clipsChanged)
+    Q_PROPERTY(bool muteVideoAudio READ muteVideoAudio NOTIFY clipsChanged)
+    Q_PROPERTY(double mergeDuration READ mergeDuration NOTIFY clipsChanged)
+    Q_PROPERTY(bool anyAudioWork READ anyAudioWork NOTIFY clipsChanged)
 
 public:
     explicit ShortcutBackend(QUrl source, double duration, QObject *parent = nullptr)
@@ -109,6 +121,16 @@ public:
     int currentIndex() const { return m_source.isEmpty() ? -1 : 0; }
     double clipStartSec() const { return 0.0; }
     double clipEndSec() const { return m_duration; }
+    bool clipHasAudio() const { return false; }
+    double clipAudioStart() const { return 0.0; }
+    double clipAudioEnd() const { return 0.0; }
+    double clipAudioDuration() const { return 0.0; }
+    QString clipAudioName() const { return {}; }
+    AudioTrackModel *audioTrack() const { return nullptr; }
+    int audioTrackCount() const { return 0; }
+    bool muteVideoAudio() const { return false; }
+    double mergeDuration() const { return m_duration; }
+    bool anyAudioWork() const { return false; }
 
     Q_INVOKABLE bool load(const QUrl &) { return false; }
     Q_INVOKABLE void openVideoDialog() { ++openCount; }
@@ -138,6 +160,14 @@ public:
     Q_INVOKABLE void removeClip(int) {}
     Q_INVOKABLE void moveClip(int, int) {}
     Q_INVOKABLE void exportMergeDialog() { ++mergeExportCount; }
+    Q_INVOKABLE void attachAudioDialog(int) { ++attachCount; }
+    Q_INVOKABLE void detachAudio(int) {}
+    Q_INVOKABLE void setClipAudioTrim(int, double, double) {}
+    Q_INVOKABLE void addAudioDialog() { ++addAudioCount; }
+    Q_INVOKABLE void removeAudio(int) {}
+    Q_INVOKABLE void setAudioTrim(int, double, double) {}
+    Q_INVOKABLE void setAudioPosition(int, double) {}
+    Q_INVOKABLE void setMuteVideoAudio(bool) {}
 
     void announceInfo() { emit infoChanged(); }
     void announceExportDone() { emit exportDone(QStringLiteral("/tmp/exported.mp4")); }
@@ -145,6 +175,8 @@ public:
     int openCount = 0;
     int exportCount = 0;
     int mergeExportCount = 0;
+    int attachCount = 0;
+    int addAudioCount = 0;
     double lastStart = 0;
     double lastEnd = 0;
     int thumbRequestCount = 0;
@@ -225,6 +257,13 @@ private slots:
     void pickerMultiSelectionAddsClips();
     void selectRemoveReorderClips();
     void setClipTrimMarksDirty();
+    void attachAudioReplacesAndDetaches();
+    void setClipAudioTrimClampsToAudioDuration();
+    void audioProbeReadsDuration();
+    void trimArgsWithAudioReplacesStream();
+    void mixArgsBuildsFilterGraph();
+    void exportClipWithAudioWritesAudio();
+    void exportMergeWithAudioTrack();
     void thumbnailSlotsAreExposedImmediately();
     void thumbProviderUsesRevisionPrefixedIds();
     void thumbProviderScalesHeightOnlyRequests();
@@ -263,6 +302,7 @@ private:
     QTemporaryDir m_dir;
     QString m_videoPath;
     QString m_bigVideoPath;
+    QString m_audioPath;
 };
 
 void BackendTests::initTestCase() {
@@ -314,6 +354,25 @@ void BackendTests::initTestCase() {
     QCOMPARE(bigProc.exitStatus(), QProcess::NormalExit);
     QCOMPARE(bigProc.exitCode(), 0);
     QVERIFY(QFileInfo::exists(m_bigVideoPath));
+
+    // A 4-second tone for the audio features.
+    m_audioPath = m_dir.filePath(QStringLiteral("tone.wav"));
+    QProcess audioProc;
+    audioProc.start(ffmpeg, {
+        QStringLiteral("-hide_banner"),
+        QStringLiteral("-loglevel"),
+        QStringLiteral("error"),
+        QStringLiteral("-f"),
+        QStringLiteral("lavfi"),
+        QStringLiteral("-i"),
+        QStringLiteral("sine=frequency=440:duration=4"),
+        QStringLiteral("-y"),
+        m_audioPath,
+    });
+    QVERIFY2(audioProc.waitForFinished(10000), qPrintable(QString::fromUtf8(audioProc.readAll())));
+    QCOMPARE(audioProc.exitStatus(), QProcess::NormalExit);
+    QCOMPARE(audioProc.exitCode(), 0);
+    QVERIFY(QFileInfo::exists(m_audioPath));
 }
 
 void BackendTests::waitForBackgroundWork(Backend &backend) {
@@ -449,6 +508,168 @@ void BackendTests::setClipTrimMarksDirty() {
     // Back to the full range clears the trimmed flag.
     backend.setClipTrim(0, 0.0, backend.duration());
     QCOMPARE(backend.anyClipTrimmed(), false);
+}
+
+void BackendTests::attachAudioReplacesAndDetaches() {
+    ThumbProvider provider;
+    auto *picker = new FakeFilePicker;
+    Backend backend(&provider, picker);
+
+    QVERIFY(backend.load(videoUrl()));
+    waitForBackgroundWork(backend);
+    QCOMPARE(backend.clipHasAudio(), false);
+
+    backend.attachAudioDialog(0);
+    emit picker->audioSelected(QUrl::fromLocalFile(m_audioPath));
+
+    QVERIFY(backend.clipHasAudio());
+    QCOMPARE(backend.clipAudioName(), QStringLiteral("tone.wav"));
+    QVERIFY(backend.clipAudioDuration() > 0.0);
+    QCOMPARE(backend.clipAudioStart(), 0.0);
+    QCOMPARE(backend.clipAudioEnd(), backend.clipAudioDuration());
+    QVERIFY(backend.anyAudioWork());
+
+    backend.detachAudio(0);
+    QCOMPARE(backend.clipHasAudio(), false);
+    QCOMPARE(backend.anyAudioWork(), false);
+}
+
+void BackendTests::setClipAudioTrimClampsToAudioDuration() {
+    ThumbProvider provider;
+    auto *picker = new FakeFilePicker;
+    Backend backend(&provider, picker);
+
+    QVERIFY(backend.load(videoUrl()));
+    waitForBackgroundWork(backend);
+    backend.attachAudioDialog(0);
+    emit picker->audioSelected(QUrl::fromLocalFile(m_audioPath));
+
+    const double duration = backend.clipAudioDuration();
+    backend.setClipAudioTrim(0, -5.0, duration + 5.0);
+    QCOMPARE(backend.clipAudioStart(), 0.0);
+    QCOMPARE(backend.clipAudioEnd(), duration);
+
+    backend.setClipAudioTrim(0, 1.0, 2.5);
+    QCOMPARE(backend.clipAudioStart(), 1.0);
+    QCOMPARE(backend.clipAudioEnd(), 2.5);
+}
+
+void BackendTests::audioProbeReadsDuration() {
+    const ffmpeg::VideoInfo info = ffmpeg::audioProbe(m_audioPath);
+    QVERIFY(info.ok);
+    QVERIFY(info.duration > 3.5 && info.duration < 4.5);
+
+    // The test video is generated without an audio stream.
+    const ffmpeg::VideoInfo silent = ffmpeg::audioProbe(m_videoPath);
+    QVERIFY(!silent.ok);
+    QVERIFY(!silent.error.isEmpty());
+}
+
+void BackendTests::trimArgsWithAudioReplacesStream() {
+    const ffmpeg::AudioSpec audio{QStringLiteral("a.wav"), 1.0, 3.0, 0.0};
+    const QStringList args = ffmpeg::trimArgs(QStringLiteral("in.mp4"), QStringLiteral("out.mp4"),
+                                              0.0, 4.0, 0, audio);
+
+    QVERIFY(args.contains(QStringLiteral("-i")));
+    QVERIFY(args.contains(QStringLiteral("a.wav")));
+    QVERIFY(args.contains(QStringLiteral("0:v:0")));
+    QVERIFY(args.contains(QStringLiteral("1:a:0")));
+    QVERIFY(args.contains(QStringLiteral("apad")));
+}
+
+void BackendTests::mixArgsBuildsFilterGraph() {
+    const QList<ffmpeg::AudioSpec> clips = {
+        {QStringLiteral("a.wav"), 0.0, 2.0, 0.0},
+        {QStringLiteral("b.wav"), 1.0, 3.0, 4.0},
+    };
+    // With the video's own audio kept as the amix base.
+    QStringList args = ffmpeg::mixArgs(QStringLiteral("merged.mp4"),
+                                       QStringLiteral("out.mp4"), clips, 8.0, false, true);
+    const int fc = args.indexOf(QStringLiteral("-filter_complex"));
+    QVERIFY(fc >= 0);
+    QString graph = args.at(fc + 1);
+    QVERIFY(graph.contains(QStringLiteral("amix=inputs=3:duration=first:normalize=0")));
+    QVERIFY(graph.contains(QStringLiteral("atrim=start=0.000:end=2.000")));
+    QVERIFY(graph.contains(QStringLiteral("adelay=4000|4000")));
+    QVERIFY(graph.contains(QStringLiteral("[0:a]")));
+
+    // Muting drops the video audio in favour of a synthesized silent base...
+    args = ffmpeg::mixArgs(QStringLiteral("merged.mp4"), QStringLiteral("out.mp4"),
+                           clips, 8.0, true, true);
+    graph = args.at(args.indexOf(QStringLiteral("-filter_complex")) + 1);
+    QVERIFY(graph.contains(QStringLiteral("anullsrc=r=48000:cl=stereo:d=8.000")));
+    QVERIFY(!graph.contains(QStringLiteral("[0:a]")));
+
+    // ...and so does a merged video without an audio stream at all.
+    args = ffmpeg::mixArgs(QStringLiteral("merged.mp4"), QStringLiteral("out.mp4"),
+                           clips, 8.0, false, false);
+    graph = args.at(args.indexOf(QStringLiteral("-filter_complex")) + 1);
+    QVERIFY(graph.contains(QStringLiteral("anullsrc=r=48000:cl=stereo:d=8.000")));
+    QVERIFY(!graph.contains(QStringLiteral("[0:a]")));
+}
+
+void BackendTests::exportClipWithAudioWritesAudio() {
+    ThumbProvider provider;
+    auto *picker = new FakeFilePicker;
+    Backend backend(&provider, picker);
+    QSignalSpy doneSpy(&backend, &Backend::exportDone);
+    QSignalSpy failedSpy(&backend, &Backend::exportFailed);
+
+    QVERIFY(backend.load(videoUrl()));
+    waitForBackgroundWork(backend);
+    backend.attachAudioDialog(0);
+    emit picker->audioSelected(QUrl::fromLocalFile(m_audioPath));
+
+    const QString outPath = m_dir.filePath(QStringLiteral("clip-with-audio.mp4"));
+    backend.exportClip(QUrl::fromLocalFile(outPath), 0.0, 1.0);
+
+    QTRY_VERIFY_WITH_TIMEOUT(doneSpy.count() + failedSpy.count() > 0, 20000);
+    QCOMPARE(failedSpy.count(), 0);
+    QCOMPARE(doneSpy.count(), 1);
+    QVERIFY(QFileInfo::exists(outPath));
+
+    const ffmpeg::VideoInfo info = ffmpeg::probe(outPath);
+    QVERIFY(info.ok);
+    QVERIFY(info.duration > 0.8 && info.duration < 1.2);
+}
+
+void BackendTests::exportMergeWithAudioTrack() {
+    ThumbProvider provider;
+    auto *picker = new FakeFilePicker;
+    Backend backend(&provider, picker);
+    QSignalSpy doneSpy(&backend, &Backend::mergeDone);
+    QSignalSpy failedSpy(&backend, &Backend::exportFailed);
+
+    QVERIFY(backend.load(videoUrl()));
+    waitForBackgroundWork(backend);
+    QVERIFY(backend.load(videoUrl()));
+    waitForBackgroundWork(backend);
+    QCOMPARE(backend.clipCount(), 2);
+
+    // Two audio clips, one at the start and one offset by a second.
+    backend.addAudioDialog();
+    QCOMPARE(picker->audioOpenCount, 1);
+    emit picker->audioSelected(QUrl::fromLocalFile(m_audioPath));
+    emit picker->audioSelected(QUrl::fromLocalFile(m_audioPath));
+    QCOMPARE(backend.audioTrackCount(), 2);
+    backend.setAudioPosition(1, 1.0);
+    backend.setAudioTrim(1, 0.0, 2.0);
+    backend.setMuteVideoAudio(true);
+
+    const QString outPath = m_dir.filePath(QStringLiteral("merged-with-audio.mp4"));
+    backend.exportMerge(QUrl::fromLocalFile(outPath), 0);
+
+    QTRY_VERIFY_WITH_TIMEOUT(doneSpy.count() + failedSpy.count() > 0, 30000);
+    QCOMPARE(failedSpy.count(), 0);
+    QCOMPARE(doneSpy.count(), 1);
+    QVERIFY(QFileInfo::exists(outPath));
+
+    const ffmpeg::VideoInfo info = ffmpeg::probe(outPath);
+    QVERIFY(info.ok);
+    QVERIFY(info.duration > 1.8 && info.duration < 2.2);
+    QVERIFY(!QFileInfo::exists(outPath + QStringLiteral(".omavid-part.mp4")));
+    QVERIFY(!QFileInfo::exists(outPath + QStringLiteral(".omavid-mix.mp4")));
+    QVERIFY(!QFileInfo::exists(outPath + QStringLiteral(".omavid-merge")));
 }
 
 void BackendTests::thumbnailSlotsAreExposedImmediately() {
